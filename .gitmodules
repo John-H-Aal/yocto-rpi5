@@ -1,0 +1,3 @@
+[submodule "meta-john"]
+	path = meta-john
+	url = https://github.com/John-H-Aal/meta-john

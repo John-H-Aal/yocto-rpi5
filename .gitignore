@@ -1,0 +1,13 @@
+# Upstream layers — cloned separately, not part of this repo
+poky/
+meta-openembedded/
+meta-raspberrypi/
+rpi-eeprom/
+
+# Build artifacts
+build-rpi5/tmp/
+build-rpi5/cache/
+build-rpi5/bitbake-cookerdaemon.log
+build-rpi5/.vscode/
+downloads/
+sstate-cache/
