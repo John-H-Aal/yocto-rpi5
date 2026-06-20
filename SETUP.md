@@ -93,11 +93,15 @@ meta-john/
 │   │   ├── eth0-networkd-config_1.0.bb         — installs systemd-networkd profile
 │   │   └── files/
 │   │       └── 10-eth0.network                 — static IP 169.254.100.1/16
-│   └── pi-ble-status/
-│       ├── pi-ble-status_1.0.bb                — BLE GATT diagnostic server
+│   ├── pi-ble-status/
+│   │   ├── pi-ble-status_1.0.bb                — BLE GATT server: diagnostics + WiFi provisioning
+│   │   └── files/
+│   │       ├── pi-ble-status.py
+│   │       └── pi-ble-status.service
+│   └── wlan0-config/
+│       ├── wlan0-config_1.0.bb                 — DHCP for wlan0 via systemd-networkd + wpa-supplicant
 │       └── files/
-│           ├── pi-ble-status.py
-│           └── pi-ble-status.service
+│           └── 20-wlan0.network
 ├── recipes-core/
 │   ├── images/
 │   │   └── rpi5-base-image.bb                  — NVMe target image
@@ -122,7 +126,8 @@ meta-john/
 | Package | Purpose |
 |---|---|
 | `ssh-server-openssh` (IMAGE_FEATURES) | OpenSSH server |
-| `bluez5` + `pi-ble-status` | BLE GATT server exposing IP, temp, uptime, hostname |
+| `bluez5` + `pi-ble-status` | BLE GATT server: chars `1001`–`1005` expose IP/temp/uptime/hostname; char `1006` (writable) provisions wlan0 WiFi at runtime |
+| `wlan0-config` + `wpa-supplicant` | systemd-networkd DHCP profile for wlan0; credentials written by BLE provisioning |
 | `eth0-networkd-config` | systemd-networkd static IP profile |
 | `ssh-keys` | Bakes authorized ED25519 key into `/root/.ssh/authorized_keys` |
 | `e2fsprogs` + `e2fsprogs-mke2fs` + `e2fsprogs-e2fsck` + `e2fsprogs-resize2fs` | Filesystem tools |
@@ -190,7 +195,7 @@ meta-john
 | `MACHINE` | `raspberrypi5` | Target hardware |
 | `DISTRO` | `poky` | Reference distro |
 | `IMAGE_FSTYPES` | `wic.bz2 wic.bmap` | Partition-aware image for flashing |
-| `EXTRA_IMAGE_FEATURES` | `debug-tweaks ssh-server-dropbear` | Empty root password + SSH on minimal image |
+| `EXTRA_IMAGE_FEATURES` | `ssh-server-dropbear` | Dropbear SSH on core-image-minimal |
 | `DISTRO_FEATURES:append` | `systemd usrmerge` | systemd as init manager (required for pi-ble-status) |
 | `VIRTUAL-RUNTIME_init_manager` | `systemd` | Selects systemd over sysvinit |
 | `LICENSE_FLAGS_ACCEPTED` | `synaptics-killswitch` | Required for RPi WiFi firmware in packagegroup |
@@ -307,10 +312,9 @@ The bootloader applies the update and reboots automatically. Files are cleared f
 **Always flash from SD, never while NVMe is the running root** — writing to a mounted root corrupts the filesystem.
 
 ```bash
-# Step 1: Insert SD card and reboot (BOOT_ORDER=0xf16 — NVMe first, but SD boots
-#         when NVMe is being reflashed and Pi was rebooted from NVMe session)
-# If currently on NVMe: ssh root@169.254.100.1 'reboot'  (then insert SD)
-# If Pi is off: just insert SD and power on
+# Step 1: Zero nvme0n1p1 boot sector — forces SD fallback on next boot
+# (BOOT_ORDER=0xf16 tries NVMe first; wiping the boot sector makes it fall through to SD)
+ssh root@169.254.100.1 'dd if=/dev/zero of=/dev/nvme0n1p1 bs=512 count=1 && reboot'
 
 # Step 2: Wait for SD boot — uses Dropbear (RSA host key), NOT your ED25519 key
 ssh-keygen -R 169.254.100.1
@@ -322,9 +326,12 @@ ssh -o StrictHostKeyChecking=no root@169.254.100.1 'cat /proc/cmdline | grep -o 
 
 # Step 3: Pipe NVMe image directly from laptop to Pi
 bzcat ~/repos/yocto-rpi5/build-rpi5/tmp/deploy/images/raspberrypi5/rpi5-base-image-raspberrypi5.rootfs.wic.bz2 \
-    | ssh -o StrictHostKeyChecking=no root@169.254.100.1 'dd of=/dev/nvme0n1 bs=4M && sync && reboot'
+    | ssh -o StrictHostKeyChecking=no root@169.254.100.1 'dd of=/dev/nvme0n1 bs=4M && sync'
 
-# Step 4: Pi reboots — NVMe boots automatically (SD stays in as silent fallback)
+# Step 4: Reboot — separate command ('reboot' inside the pipe returns Access denied on SD image)
+ssh -o StrictHostKeyChecking=no root@169.254.100.1 reboot
+
+# Step 5: Pi reboots from NVMe — SD stays in as silent fallback
 # resize-rootfs runs on first NVMe boot
 ssh-keygen -R 169.254.100.1 && ssh root@169.254.100.1
 # ED25519 key accepted, no password
