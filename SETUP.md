@@ -86,6 +86,8 @@ git clone https://github.com/raspberrypi/rpi-eeprom   # for EEPROM update toolin
 meta-john/
 ├── conf/
 │   └── layer.conf
+├── wic/
+│   └── nvme-raspberrypi.wks               — wic layout targeting nvme0n1
 ├── recipes-connectivity/
 │   └── nm-eth0-config/
 │       ├── nm-eth0-config_1.0.bb          — installs NM connection profile
@@ -253,28 +255,32 @@ The rpi-eeprom repo contains firmware binaries and tools. To update the EEPROM:
 ```bash
 cd ~/repos/yocto-rpi5/rpi-eeprom
 
+# Use firmware-2712/stable/pieeprom-2026-05-26.bin — NOT 2026-06-17.
+# The 2026-06-17 firmware has a regression that prevents NVMe boot via the
+# Argon ONE V3 PCIe adapter. The 2026-05-26 (default) version works correctly.
+
 printf '[all]\nBOOT_UART=1\nBOOT_ORDER=0xf16\nNET_INSTALL_AT_POWER_ON=1\n' \
     > /tmp/bootconf.txt
 
 python3 rpi-eeprom-config \
     --config /tmp/bootconf.txt \
     --out /tmp/pieeprom.upd \
-    firmware-2712/stable/pieeprom-2026-06-17.bin
+    firmware-2712/stable/pieeprom-2026-05-26.bin
 
 python3 rpi-eeprom-config /tmp/pieeprom.upd   # verify before applying
 
 bash rpi-eeprom-digest -i /tmp/pieeprom.upd -o /tmp/pieeprom.sig
 
-scp /tmp/pieeprom.upd /tmp/pieeprom.sig \
-    firmware-2712/stable/recovery.bin \
-    root@169.254.100.1:/boot/
+scp /tmp/pieeprom.upd /tmp/pieeprom.sig root@169.254.100.1:/boot/
 
 ssh root@169.254.100.1 'sync && reboot'
 ```
 
-The bootloader detects `recovery.bin` on the boot partition regardless of current boot order, applies the update, renames `recovery.bin` to `RECOVERY.000`, and reboots.
+The bootloader finds `pieeprom.upd` on the SD boot partition, applies the update, and reboots.
 
 **BOOT_ORDER values (read right to left):** `0x1` = SD, `0x6` = NVMe, `0xf` = restart loop.
+
+**Important:** After an EEPROM update, the Pi reboots into NVMe-first mode. If the SD card is still inserted, the post-update reboot may fail to boot NVMe (the SD confuses the firmware during this transition). Remove the SD card before or immediately after the reboot that applies the EEPROM update. Reinsert it once NVMe is booted — it sits unmounted as a silent fallback.
 
 ---
 
@@ -283,26 +289,26 @@ The bootloader detects `recovery.bin` on the boot partition regardless of curren
 **Always flash from SD, never while NVMe is the running root** — writing to a mounted root corrupts the filesystem.
 
 ```bash
-# Step 1: Force SD boot by zeroing the NVMe boot sector
+# Step 1: Force SD boot by zeroing the NVMe boot sector, then reboot
 ssh root@169.254.100.1 'dd if=/dev/zero of=/dev/nvme0n1p1 bs=512 count=1 && reboot'
 
 # Step 2: Wait for SD to come up, then pipe image directly from laptop
 ssh-keygen -R 169.254.100.1
 bzcat ~/repos/yocto-rpi5/build-rpi5/tmp/deploy/images/raspberrypi5/rpi5-base-image-raspberrypi5.rootfs.wic.bz2 \
-    | ssh root@169.254.100.1 \
-    'dd of=/dev/nvme0n1 bs=4M && \
-     mkdir -p /tmp/nvme && mount /dev/nvme0n1p1 /tmp/nvme && \
-     sed -i s/mmcblk0p2/nvme0n1p2/ /tmp/nvme/cmdline.txt && \
-     umount /tmp/nvme && sync && reboot'
+    | ssh root@169.254.100.1 'dd of=/dev/nvme0n1 bs=4M && sync && reboot'
 
-# Step 3: Wait for NVMe to come up — resize-rootfs runs automatically on first boot
+# Step 3: Remove SD card before/during the NVMe boot (see EEPROM note in §7)
+# Step 4: Wait for NVMe to come up — resize-rootfs runs automatically on first boot
 ssh-keygen -R 169.254.100.1
 ssh root@169.254.100.1
+# Reinsert SD card — it will appear as mmcblk0 unmounted, available as fallback
 ```
 
 **Why pipe instead of scp to /tmp?** Avoids filling the SD root filesystem. The image streams directly from the laptop into dd on the Pi.
 
 **Why zero nvme0n1p1?** Makes the NVMe boot partition unreadable by the EEPROM bootloader, forcing fallback to SD for the next boot only. The full reflash restores a valid boot partition.
+
+**No manual cmdline.txt patch needed.** The `rpi5-base-image` recipe uses `IMAGE_POSTPROCESS_COMMAND` to patch `cmdline.txt` (root device) and `/etc/fstab` (/boot mount) inside the wic image at build time. Yocto's wic tool uses `--ondisk mmcblk0` naming by default; the patch corrects both to `nvme0n1p*` device names.
 
 ---
 
@@ -328,7 +334,7 @@ bitbake rpi5-base-image
 | Item | Notes |
 |---|---|
 | Clock resets to 1970 on boot | No RTC battery — add `ntp`/`chrony` + internet access to fix |
-| `cmdline.txt` hardcoded to `mmcblk0p2` in wic | Patched during reflash via `sed` — permanent fix: custom `.wks` file in `meta-john` |
+| wic generates `nvme0n11` instead of `nvme0n1p1` | `direct.py` only adds `p` separator for `mmcblk` devices. Fixed via `IMAGE_POSTPROCESS_COMMAND` in `rpi5-base-image.bb` using `debugfs` to patch `/etc/fstab` and `mcopy` to patch `cmdline.txt` inside the wic image. |
 | Yocto sstate mirror disabled | Enable after `sudo dnf install python3-websockets` and uncommenting `BB_HASHSERVE_UPSTREAM` in `local.conf` |
 | Poky WARNING in MOTD | Remove `/etc/motd` in `rpi5-base-image.bb` if desired |
 | `meta-john` layer shows `<unknown>` revision | Not a git repo — `git init` in `meta-john/` to fix |

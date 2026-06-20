@@ -47,6 +47,7 @@ Power on
 yocto-rpi5/
 ├── build-rpi5/conf/        — local.conf, bblayers.conf
 ├── meta-john/              — custom layer (git submodule)
+│   ├── wic/nvme-raspberrypi.wks               — custom wic layout targeting nvme0n1
 │   ├── recipes-core/images/rpi5-base-image.bb
 │   ├── recipes-connectivity/nm-eth0-config/   — static IP via NetworkManager
 │   ├── recipes-core/init-ifupdown/            — static IP for minimal image
@@ -110,16 +111,17 @@ sudo eject /dev/sdX
 ### 6. Flash NVMe (from SD, via SSH)
 
 ```bash
-# Force SD boot
+# Force SD boot by zeroing the NVMe boot sector, then reboot
 ssh root@169.254.100.1 'dd if=/dev/zero of=/dev/nvme0n1p1 bs=512 count=1 && reboot'
 
-# Pipe image directly from laptop to Pi
+# Wait for SD to come up, then pipe image directly from laptop
+ssh-keygen -R 169.254.100.1
 bzcat build-rpi5/tmp/deploy/images/raspberrypi5/rpi5-base-image-raspberrypi5.rootfs.wic.bz2 \
-    | ssh root@169.254.100.1 \
-    'dd of=/dev/nvme0n1 bs=4M && \
-     mkdir -p /tmp/nvme && mount /dev/nvme0n1p1 /tmp/nvme && \
-     sed -i s/mmcblk0p2/nvme0n1p2/ /tmp/nvme/cmdline.txt && \
-     umount /tmp/nvme && sync && reboot'
+    | ssh root@169.254.100.1 'dd of=/dev/nvme0n1 bs=4M && sync && reboot'
+
+# Remove the SD card before the Pi boots — required on first NVMe boot after EEPROM update
+# (the SD card presence can confuse the bootloader post-update reboot)
+# Once NVMe is booted, reinsert SD — it stays unmounted as a silent fallback
 ```
 
 Root partition auto-expands to fill the NVMe on first boot.
