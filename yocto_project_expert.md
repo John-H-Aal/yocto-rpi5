@@ -85,6 +85,9 @@ IMAGE_INSTALL:append = " \
 
 ## `meta-john` Recipe Details
 
+### `wlan0-config`
+Installs `/etc/systemd/network/20-wlan0.network` with DHCP for wlan0. No credentials — WiFi is provisioned at runtime via BLE. Pulls in `wpa-supplicant` as an `RDEPENDS`.
+
 ### `eth0-networkd-config`
 Installs `/etc/systemd/network/10-eth0.network` with a static IP config:
 
@@ -115,6 +118,8 @@ A Python 3 BLE GATT server (bluez5/dbus) that advertises as the hostname and exp
 | `1005` | Hostname |
 
 Useful for diagnosing networking issues before SSH is reachable. Requires `bluez5`, `python3-dbus`, `python3-pygobject`, and `bluetooth.target` in systemd.
+
+Characteristic `1006` is writable — write `SSID/password` (or `SSID:password` or `SSID\npassword`) to provision WiFi at runtime. The script writes `/etc/wpa_supplicant/wpa_supplicant-wlan0.conf`, enables and starts `wpa_supplicant@wlan0.service`. Credentials persist on the ext4 rootfs across reboots; a reflash wipes them. Read `1006` back for status (`connecting:SSID`), read `1001` for the wlan0 DHCP IP once connected.
 
 ### `init-ifupdown` bbappend (for `core-image-minimal`)
 Appends a static IP stanza to `/etc/network/interfaces`. Works because `core-image-minimal` does not include NetworkManager — `init-ifupdown` owns `eth0` without conflict.
@@ -178,7 +183,10 @@ bitbake rpi5-base-image
 bzcat build-rpi5/tmp/deploy/images/raspberrypi5/core-image-minimal-raspberrypi5.rootfs.wic.bz2 \
     | sudo dd of=/dev/sdX bs=4M
 
-# Insert SD, wait for boot (SD uses Dropbear — StrictHostKeyChecking=no required)
+# Insert SD. BOOT_ORDER=0xf16 boots NVMe first, so zero the boot sector to force SD fallback:
+ssh root@169.254.100.1 'dd if=/dev/zero of=/dev/nvme0n1p1 bs=512 count=1 && reboot'
+
+# Wait for SD boot (Dropbear RSA — StrictHostKeyChecking=no required)
 ssh-keygen -R 169.254.100.1
 until ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no root@169.254.100.1 'echo up'; do sleep 5; done
 
@@ -186,13 +194,18 @@ until ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no root@169.254.100.1 'ec
 ssh -o StrictHostKeyChecking=no root@169.254.100.1 'cat /proc/cmdline | grep -o "root=[^ ]*"'
 # expect: root=/dev/mmcblk0p2
 
-# Pipe NVMe image from laptop directly to Pi (avoids filling SD root)
+# Pipe NVMe image from laptop directly to Pi
 bzcat build-rpi5/tmp/deploy/images/raspberrypi5/rpi5-base-image-raspberrypi5.rootfs.wic.bz2 \
-    | ssh -o StrictHostKeyChecking=no root@169.254.100.1 'dd of=/dev/nvme0n1 bs=4M && sync && reboot'
+    | ssh -o StrictHostKeyChecking=no root@169.254.100.1 'dd of=/dev/nvme0n1 bs=4M && sync'
 
-# Pi reboots — NVMe boots automatically (SD stays in as fallback)
+# Reboot (separate command — 'reboot' inside the pipe returns Access denied on SD image)
+ssh -o StrictHostKeyChecking=no root@169.254.100.1 'reboot'
+
+# Pi boots from NVMe (SD stays in as silent fallback)
 ssh-keygen -R 169.254.100.1 && ssh root@169.254.100.1
-# ED25519 key accepted, no password
+
+# Re-provision WiFi via BLE: write "SSID/password" to characteristic 1006
+# Read characteristic 1001 for wlan0 DHCP IP, then: ssh root@<wlan0-ip>
 ```
 
 Never write to `nvme0n1` while it is the running root — ext4 corruption, read-only remounts, sshd unable to generate host keys.

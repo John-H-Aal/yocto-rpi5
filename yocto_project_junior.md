@@ -48,8 +48,9 @@ This is the custom layer. It contains:
 |---|---|
 | `rpi5-base-image.bb` | Defines the final NVMe image: which packages are included |
 | `eth0-networkd-config/` | Installs a systemd-networkd `.network` file for static IP on eth0 |
+| `wlan0-config/` | Installs a systemd-networkd DHCP profile for wlan0 + pulls in wpa-supplicant |
 | `ssh-keys/` | Bakes the authorized SSH public key into `/root/.ssh/authorized_keys` |
-| `pi-ble-status/` | BLE GATT server that broadcasts IP, temperature, uptime, and hostname |
+| `pi-ble-status/` | BLE GATT server: reads IP/temp/uptime/hostname; writable char 1006 provisions WiFi |
 | `init-ifupdown/` bbappend | Configures static IP for `core-image-minimal` (no NetworkManager) |
 | `packagegroup-base.bbappend` | Removes `ofono` and `neard` (unwanted modem/NFC daemons) |
 | `resize-rootfs/` | First-boot script that expands the root partition to fill the drive |
@@ -124,6 +125,8 @@ Address=169.254.100.1/16
 For `core-image-minimal`, it's configured via `/etc/network/interfaces` using `init-ifupdown`.
 
 **Important:** Do not use NetworkManager with a systemd init manager built from sstate cache — NM may be cached without systemd integration and silently fail to configure interfaces. systemd-networkd is simpler and more reliable here.
+
+WiFi (`wlan0`) uses DHCP via systemd-networkd. Credentials are provisioned at runtime over BLE — write `SSID/password` to characteristic `1006`, read the resulting DHCP IP from characteristic `1001`. No credentials are stored in the image or the repo. After provisioning, `wpa_supplicant@wlan0` is enabled and WiFi reconnects automatically on every reboot. A reflash wipes the credentials — re-provision via BLE after each reflash.
 
 ## NVMe Boot
 

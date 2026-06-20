@@ -34,7 +34,7 @@ The custom OS is intentionally minimal. It contains:
 - A networking stack that gives the Pi a fixed IP address on boot
 - Tools for managing storage (formatting, partitioning, copying)
 - A script that automatically expands the filesystem to fill the drive on first boot
-- A Bluetooth Low Energy (BLE) service that broadcasts the Pi's IP address, temperature, and uptime — useful for diagnostics when the network isn't yet up
+- A Bluetooth Low Energy (BLE) service that broadcasts the Pi's IP address, temperature, and uptime — and lets you set up WiFi by sending your network name and password over BLE from your phone
 
 There is no desktop, no browser, no GUI of any kind. It does exactly one job: run as a small networked server.
 
