@@ -49,7 +49,7 @@ This is the custom layer. It contains:
 | `rpi5-base-image.bb` | Defines the final NVMe image: which packages are included |
 | `eth0-networkd-config/` | Installs a systemd-networkd `.network` file for static IP on eth0 |
 | `wlan0-config/` | Installs a systemd-networkd DHCP profile for wlan0 + pulls in wpa-supplicant |
-| `ssh-keys/` | Bakes the authorized SSH public key into `/root/.ssh/authorized_keys` |
+| `ssh-keys/` | Bakes the authorized SSH public key into `/home/root/.ssh/authorized_keys` (root's home in Yocto is `/home/root`) |
 | `pi-ble-status/` | BLE GATT server: reads IP/temp/uptime/hostname; writable char 1006 provisions WiFi |
 | `init-ifupdown/` bbappend | Configures static IP for `core-image-minimal` (no NetworkManager) |
 | `packagegroup-base.bbappend` | Removes `ofono` and `neard` (unwanted modem/NFC daemons) |
@@ -78,7 +78,7 @@ The permanent image, built by `meta-john`. Runs from NVMe. Includes:
 MACHINE = "raspberrypi5"
 DISTRO = "poky"
 IMAGE_FSTYPES = "wic.bz2 wic.bmap"
-EXTRA_IMAGE_FEATURES = "debug-tweaks ssh-server-dropbear"
+EXTRA_IMAGE_FEATURES = "ssh-server-dropbear"
 LICENSE_FLAGS_ACCEPTED = "synaptics-killswitch"   # required for RPi WiFi firmware
 
 # Use systemd as init manager (required for pi-ble-status and service management)
@@ -163,3 +163,6 @@ ssh-keygen -R 169.254.100.1 && ssh root@169.254.100.1
 - The Fedora 44 "not a validated distro" warning is harmless
 - When changing `DISTRO_FEATURES` (e.g. adding `systemd`), run `bitbake -c cleansstate <image>` before rebuilding — sstate can serve stale packages built without systemd support
 - SD image (core-image-minimal) uses Dropbear and presents an RSA host key; NVMe image uses OpenSSH with your ED25519 key baked in — always use `StrictHostKeyChecking=no` when SSHing into the SD image
+- **Root's home directory is `/home/root`**, not `/root` — install `authorized_keys` to `/home/root/.ssh/`, not `/root/.ssh/`
+- **`PermitRootLogin` must be set explicitly** — without `debug-tweaks`, root SSH is blocked by default; the image recipe sets it to `prohibit-password` via `ROOTFS_POSTPROCESS_COMMAND`
+- **WiFi needs `country=DK`** in the wpa_supplicant config or the AP rejects association

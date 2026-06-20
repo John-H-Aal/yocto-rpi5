@@ -36,7 +36,7 @@ MACHINE = "raspberrypi5"
 DISTRO = "poky"
 IMAGE_FSTYPES = "wic.bz2 wic.bmap"
 
-EXTRA_IMAGE_FEATURES = "debug-tweaks ssh-server-dropbear"
+EXTRA_IMAGE_FEATURES = "ssh-server-dropbear"
 
 # RPi closed-source WiFi firmware — without this, bitbake errors on license check
 LICENSE_FLAGS_ACCEPTED = "synaptics-killswitch"
@@ -104,7 +104,7 @@ systemd-networkd is enabled by default when `systemd` is in `DISTRO_FEATURES`. N
 **Why not NetworkManager:** NM built from sstate cache (before `DISTRO_FEATURES` included `systemd`) silently fails to configure interfaces. systemd-networkd is simpler, ships with systemd, and works correctly out of the box.
 
 ### `ssh-keys`
-Installs `/root/.ssh/authorized_keys` (mode 0600, dir 0700) with the pre-defined ED25519 public key. Eliminates the need for manual key injection after each reflash. `debug-tweaks` sets `PermitEmptyPasswords yes` in sshd_config in theory, but this is unreliable with OpenSSH — baking the key is the only robust approach.
+Installs `/home/root/.ssh/authorized_keys` (mode 0600, dir 0700) with the pre-defined ED25519 public key. Root's home in Yocto's `/etc/passwd` is `/home/root`, not `/root` — the file must go there or sshd silently ignores it. `PermitRootLogin prohibit-password` is set via `ROOTFS_POSTPROCESS_COMMAND` in the image recipe (required without `debug-tweaks`).
 
 ### `pi-ble-status`
 A Python 3 BLE GATT server (bluez5/dbus) that advertises as the hostname and exposes read-only characteristics:
@@ -249,3 +249,6 @@ The RPi5 firmware injects `reboot=w` (warm reboot) at the start of the kernel co
 - **SSH host key generation on read-only rootfs** — not a problem here (ext4 rw), but worth knowing: `openssh` generates host keys via postinstall; read-only rootfs at first boot = sshd won't start
 - **systemd-networkd + NetworkManager conflict** — do not enable both; they fight over the interface. If both are in `multi-user.target.wants` with no `.network` config file for networkd and a broken NM, neither will configure eth0 and the failure is silent
 - **`debug-tweaks` + OpenSSH `PermitEmptyPasswords`** — unreliable; bake the authorized key into the image via `ssh-keys` recipe instead
+- **Root home directory is `/home/root`, not `/root`** — Yocto's default `/etc/passwd` sets root's home to `/home/root`. The `ssh-keys` recipe must install `authorized_keys` to `${D}/home/root/.ssh/`, not `${D}/root/.ssh/`. sshd resolves `AuthorizedKeysFile .ssh/authorized_keys` relative to the user's home — wrong path = silent key auth failure even when `PermitRootLogin prohibit-password` is correctly set
+- **`PermitRootLogin` must be explicitly set** — without `debug-tweaks`, the compiled-in OpenSSH default blocks root login. Set `PermitRootLogin prohibit-password` via `ROOTFS_POSTPROCESS_COMMAND` in the image recipe
+- **WiFi regulatory domain** — wpa_supplicant requires `country=DK` in `wpa_supplicant-wlan0.conf` or the AP rejects association at the driver level (status_code=16, BSSID all-zeros). The BLE provisioning script now writes `country=DK` automatically
