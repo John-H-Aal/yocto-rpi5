@@ -1,0 +1,261 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+     width="960" height="590" viewBox="0 0 960 590">
+
+  <defs>
+    <marker id="arr" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#778899"/>
+    </marker>
+  </defs>
+
+  <!-- Page background -->
+  <rect width="960" height="590" fill="#EEF0F3"/>
+
+  <!-- Title -->
+  <text x="480" y="34" font-family="Liberation Sans,Arial,sans-serif" font-size="17"
+        font-weight="bold" text-anchor="middle" fill="#1C2833">
+    Yocto Build System — Raspberry Pi 5 · Scarthgap 5.0 LTS
+  </text>
+
+  <!-- ═══════════════════ LEFT: LAYER STACK ══════════════════════ -->
+  <rect x="20" y="47" width="248" height="405" rx="7" fill="#DDE2E8" stroke="#B0B8C4" stroke-width="1.5"/>
+  <text x="144" y="68" font-family="Liberation Sans,Arial,sans-serif" font-size="13"
+        font-weight="bold" text-anchor="middle" fill="#2C3E50">Layer Stack</text>
+  <text x="144" y="83" font-family="Liberation Sans,Arial,sans-serif" font-size="9"
+        text-anchor="middle" fill="#7F8C8D">bblayers.conf · higher overrides lower</text>
+
+  <!-- meta-john -->
+  <rect x="32" y="92" width="224" height="68" rx="5" fill="#1D6A3E"/>
+  <text x="144" y="112" font-family="Liberation Sans,Arial,sans-serif" font-size="12"
+        font-weight="bold" text-anchor="middle" fill="#FFFFFF">meta-john  (custom)</text>
+  <text x="144" y="128" font-family="Liberation Sans,Arial,sans-serif" font-size="9"
+        text-anchor="middle" fill="#A9DFBF">rpi5-base-image · eth0-networkd-config</text>
+  <text x="144" y="143" font-family="Liberation Sans,Arial,sans-serif" font-size="9"
+        text-anchor="middle" fill="#A9DFBF">ssh-keys · pi-ble-status · resize-rootfs</text>
+
+  <!-- meta-raspberrypi -->
+  <rect x="32" y="170" width="224" height="55" rx="5" fill="#A93226"/>
+  <text x="144" y="191" font-family="Liberation Sans,Arial,sans-serif" font-size="12"
+        font-weight="bold" text-anchor="middle" fill="#FFFFFF">meta-raspberrypi</text>
+  <text x="144" y="208" font-family="Liberation Sans,Arial,sans-serif" font-size="9"
+        text-anchor="middle" fill="#F5B7B1">BSP · kernel 6.6 · RPi firmware · DTBs</text>
+
+  <!-- meta-openembedded -->
+  <rect x="32" y="235" width="224" height="105" rx="5" fill="#1A5276"/>
+  <text x="144" y="254" font-family="Liberation Sans,Arial,sans-serif" font-size="12"
+        font-weight="bold" text-anchor="middle" fill="#FFFFFF">meta-openembedded</text>
+  <!-- meta-oe -->
+  <rect x="41" y="262" width="63" height="65" rx="3" fill="#154360"/>
+  <text x="72" y="280" font-family="Liberation Sans,Arial,sans-serif" font-size="9"
+        font-weight="bold" text-anchor="middle" fill="#FFFFFF">meta-oe</text>
+  <text x="72" y="294" font-family="Liberation Sans,Arial,sans-serif" font-size="8"
+        text-anchor="middle" fill="#85C1E9">base pkgs</text>
+  <text x="72" y="307" font-family="Liberation Sans,Arial,sans-serif" font-size="8"
+        text-anchor="middle" fill="#85C1E9">e2fsprogs</text>
+  <text x="72" y="320" font-family="Liberation Sans,Arial,sans-serif" font-size="8"
+        text-anchor="middle" fill="#85C1E9">parted</text>
+  <!-- meta-python -->
+  <rect x="112" y="262" width="63" height="65" rx="3" fill="#154360"/>
+  <text x="143" y="280" font-family="Liberation Sans,Arial,sans-serif" font-size="9"
+        font-weight="bold" text-anchor="middle" fill="#FFFFFF">meta-python</text>
+  <text x="143" y="294" font-family="Liberation Sans,Arial,sans-serif" font-size="8"
+        text-anchor="middle" fill="#85C1E9">Python 3</text>
+  <text x="143" y="307" font-family="Liberation Sans,Arial,sans-serif" font-size="8"
+        text-anchor="middle" fill="#85C1E9">dbus</text>
+  <text x="143" y="320" font-family="Liberation Sans,Arial,sans-serif" font-size="8"
+        text-anchor="middle" fill="#85C1E9">pygobject</text>
+  <!-- meta-networking -->
+  <rect x="183" y="262" width="66" height="65" rx="3" fill="#154360"/>
+  <text x="216" y="277" font-family="Liberation Sans,Arial,sans-serif" font-size="9"
+        font-weight="bold" text-anchor="middle" fill="#FFFFFF">meta-</text>
+  <text x="216" y="290" font-family="Liberation Sans,Arial,sans-serif" font-size="9"
+        font-weight="bold" text-anchor="middle" fill="#FFFFFF">networking</text>
+  <text x="216" y="304" font-family="Liberation Sans,Arial,sans-serif" font-size="8"
+        text-anchor="middle" fill="#85C1E9">bluez5</text>
+  <text x="216" y="317" font-family="Liberation Sans,Arial,sans-serif" font-size="8"
+        text-anchor="middle" fill="#85C1E9">networkd</text>
+
+  <!-- poky -->
+  <rect x="32" y="350" width="224" height="55" rx="5" fill="#CA6F1E"/>
+  <text x="144" y="370" font-family="Liberation Sans,Arial,sans-serif" font-size="12"
+        font-weight="bold" text-anchor="middle" fill="#FFFFFF">poky</text>
+  <text x="144" y="388" font-family="Liberation Sans,Arial,sans-serif" font-size="9"
+        text-anchor="middle" fill="#FAD7A0">BitBake engine · core recipes · OE-core</text>
+
+  <!-- bblayers.conf note -->
+  <rect x="32" y="418" width="224" height="24" rx="3" fill="#C8CFD8" stroke="#A8B0BC" stroke-width="1"/>
+  <text x="144" y="434" font-family="Liberation Mono,Courier New,monospace" font-size="10"
+        text-anchor="middle" fill="#2C3E50">bblayers.conf</text>
+
+  <!-- ═══════════════════ CENTER: BITBAKE ════════════════════════ -->
+  <rect x="335" y="47" width="252" height="405" rx="7" fill="#2C3E50"/>
+  <text x="461" y="70" font-family="Liberation Sans,Arial,sans-serif" font-size="15"
+        font-weight="bold" text-anchor="middle" fill="#FFFFFF">BitBake</text>
+  <text x="461" y="86" font-family="Liberation Sans,Arial,sans-serif" font-size="9"
+        text-anchor="middle" fill="#95A5A6">cross-compile x86_64 → aarch64</text>
+
+  <!-- local.conf -->
+  <rect x="347" y="97" width="228" height="58" rx="4" fill="#1A252F"/>
+  <text x="461" y="115" font-family="Liberation Sans,Arial,sans-serif" font-size="11"
+        font-weight="bold" text-anchor="middle" fill="#F4D03F">local.conf</text>
+  <text x="461" y="131" font-family="Liberation Mono,Courier New,monospace" font-size="8.5"
+        text-anchor="middle" fill="#AAB7B8">MACHINE=raspberrypi5  DISTRO=poky</text>
+  <text x="461" y="147" font-family="Liberation Mono,Courier New,monospace" font-size="8.5"
+        text-anchor="middle" fill="#AAB7B8">DISTRO_FEATURES += "systemd usrmerge"</text>
+
+  <!-- Recipes -->
+  <rect x="347" y="165" width="228" height="58" rx="4" fill="#1A252F"/>
+  <text x="461" y="183" font-family="Liberation Sans,Arial,sans-serif" font-size="11"
+        font-weight="bold" text-anchor="middle" fill="#F4D03F">Recipes  (.bb / .bbappend)</text>
+  <text x="461" y="199" font-family="Liberation Sans,Arial,sans-serif" font-size="9"
+        text-anchor="middle" fill="#AAB7B8">fetch → patch → compile → package</text>
+  <text x="461" y="215" font-family="Liberation Sans,Arial,sans-serif" font-size="9"
+        text-anchor="middle" fill="#AAB7B8">do_install → do_rootfs → do_image</text>
+
+  <!-- sstate-cache -->
+  <rect x="347" y="233" width="228" height="58" rx="4" fill="#1A252F"/>
+  <text x="461" y="251" font-family="Liberation Sans,Arial,sans-serif" font-size="11"
+        font-weight="bold" text-anchor="middle" fill="#F4D03F">sstate-cache</text>
+  <text x="461" y="267" font-family="Liberation Sans,Arial,sans-serif" font-size="9"
+        text-anchor="middle" fill="#AAB7B8">cached task outputs — fast rebuilds</text>
+  <text x="461" y="283" font-family="Liberation Sans,Arial,sans-serif" font-size="8.5"
+        text-anchor="middle" fill="#E74C3C">cleansstate after DISTRO_FEATURES change</text>
+
+  <!-- wic imager -->
+  <rect x="347" y="301" width="228" height="58" rx="4" fill="#1A252F"/>
+  <text x="461" y="319" font-family="Liberation Sans,Arial,sans-serif" font-size="11"
+        font-weight="bold" text-anchor="middle" fill="#F4D03F">wic imager</text>
+  <text x="461" y="335" font-family="Liberation Sans,Arial,sans-serif" font-size="9"
+        text-anchor="middle" fill="#AAB7B8">nvme-raspberrypi.wks → FAT32 + ext4</text>
+  <text x="461" y="351" font-family="Liberation Mono,Courier New,monospace" font-size="8.5"
+        text-anchor="middle" fill="#AAB7B8">IMAGE_FSTYPES = "wic.bz2 wic.bmap"</text>
+
+  <!-- IMAGE_POSTPROCESS -->
+  <rect x="347" y="369" width="228" height="58" rx="4" fill="#1A252F"/>
+  <text x="461" y="387" font-family="Liberation Sans,Arial,sans-serif" font-size="11"
+        font-weight="bold" text-anchor="middle" fill="#F4D03F">IMAGE_POSTPROCESS</text>
+  <text x="461" y="403" font-family="Liberation Sans,Arial,sans-serif" font-size="9"
+        text-anchor="middle" fill="#AAB7B8">patch cmdline.txt (nvme root, reboot=cold)</text>
+  <text x="461" y="419" font-family="Liberation Sans,Arial,sans-serif" font-size="9"
+        text-anchor="middle" fill="#AAB7B8">patch /etc/fstab (nvme0n1p1 naming fix)</text>
+
+  <!-- ═══════════════════ RIGHT: OUTPUT ══════════════════════════ -->
+  <rect x="655" y="47" width="285" height="405" rx="7" fill="#DDE2E8" stroke="#B0B8C4" stroke-width="1.5"/>
+  <text x="797" y="68" font-family="Liberation Sans,Arial,sans-serif" font-size="13"
+        font-weight="bold" text-anchor="middle" fill="#2C3E50">Output Images</text>
+  <text x="797" y="83" font-family="Liberation Sans,Arial,sans-serif" font-size="9"
+        text-anchor="middle" fill="#7F8C8D">tmp/deploy/images/raspberrypi5/</text>
+
+  <!-- core-image-minimal -->
+  <rect x="667" y="92" width="261" height="108" rx="5" fill="#1D6A3E"/>
+  <text x="797" y="111" font-family="Liberation Sans,Arial,sans-serif" font-size="11"
+        font-weight="bold" text-anchor="middle" fill="#FFFFFF">core-image-minimal</text>
+  <text x="797" y="127" font-family="Liberation Sans,Arial,sans-serif" font-size="9"
+        text-anchor="middle" fill="#A9DFBF">.wic.bz2  ·  Target: microSD card</text>
+  <text x="797" y="142" font-family="Liberation Sans,Arial,sans-serif" font-size="9"
+        text-anchor="middle" fill="#A9DFBF">SSH: Dropbear (RSA key)</text>
+  <text x="797" y="157" font-family="Liberation Sans,Arial,sans-serif" font-size="9"
+        text-anchor="middle" fill="#A9DFBF">root=/dev/mmcblk0p2</text>
+  <text x="797" y="172" font-family="Liberation Sans,Arial,sans-serif" font-size="9"
+        text-anchor="middle" fill="#A9DFBF">Purpose: flash NVMe · EEPROM update</text>
+  <text x="797" y="188" font-family="Liberation Sans,Arial,sans-serif" font-size="8"
+        font-style="italic" text-anchor="middle" fill="#7DCEA0">stays inserted as silent NVMe fallback</text>
+
+  <!-- rpi5-base-image -->
+  <rect x="667" y="210" width="261" height="210" rx="5" fill="#1A4F72"/>
+  <text x="797" y="229" font-family="Liberation Sans,Arial,sans-serif" font-size="11"
+        font-weight="bold" text-anchor="middle" fill="#FFFFFF">rpi5-base-image</text>
+  <text x="797" y="245" font-family="Liberation Sans,Arial,sans-serif" font-size="9"
+        text-anchor="middle" fill="#AED6F1">.wic.bz2  ·  Target: NVMe (nvme0n1)</text>
+  <text x="797" y="260" font-family="Liberation Sans,Arial,sans-serif" font-size="9"
+        text-anchor="middle" fill="#AED6F1">SSH: OpenSSH · ED25519 key baked in</text>
+  <text x="797" y="275" font-family="Liberation Sans,Arial,sans-serif" font-size="9"
+        text-anchor="middle" fill="#AED6F1">root=/dev/nvme0n1p2  ·  reboot=cold</text>
+  <!-- packages sub-box -->
+  <rect x="678" y="285" width="239" height="125" rx="3" fill="#13385A"/>
+  <text x="797" y="303" font-family="Liberation Sans,Arial,sans-serif" font-size="9"
+        font-weight="bold" text-anchor="middle" fill="#F4D03F">Packages</text>
+  <text x="797" y="318" font-family="Liberation Sans,Arial,sans-serif" font-size="8.5"
+        text-anchor="middle" fill="#AED6F1">openssh-server · systemd-networkd</text>
+  <text x="797" y="333" font-family="Liberation Sans,Arial,sans-serif" font-size="8.5"
+        text-anchor="middle" fill="#AED6F1">eth0: 169.254.100.1/16 static IP</text>
+  <text x="797" y="348" font-family="Liberation Sans,Arial,sans-serif" font-size="8.5"
+        text-anchor="middle" fill="#AED6F1">pi-ble-status (BlueZ) · e2fsprogs</text>
+  <text x="797" y="363" font-family="Liberation Sans,Arial,sans-serif" font-size="8.5"
+        text-anchor="middle" fill="#AED6F1">bmaptool · parted · resize-rootfs</text>
+  <text x="797" y="378" font-family="Liberation Sans,Arial,sans-serif" font-size="8.5"
+        text-anchor="middle" fill="#AED6F1">curl · nano · util-linux</text>
+  <text x="797" y="399" font-family="Liberation Sans,Arial,sans-serif" font-size="8"
+        font-style="italic" text-anchor="middle" fill="#7FB3D3">root partition auto-expands to fill NVMe on first boot</text>
+
+  <!-- ═══════════════════ ARROWS ══════════════════════════════════ -->
+  <!-- Layers → BitBake -->
+  <line x1="270" y1="262" x2="332" y2="262" stroke="#778899" stroke-width="2.5"
+        marker-end="url(#arr)"/>
+  <!-- BitBake → Output -->
+  <line x1="589" y1="262" x2="652" y2="262" stroke="#778899" stroke-width="2.5"
+        marker-end="url(#arr)"/>
+  <!-- Output → Hardware -->
+  <line x1="797" y1="454" x2="797" y2="467" stroke="#778899" stroke-width="2.5"
+        marker-end="url(#arr)"/>
+
+  <!-- ═══════════════════ HARDWARE PANEL ═════════════════════════ -->
+  <rect x="20" y="470" width="920" height="100" rx="7" fill="#1C2833"/>
+  <text x="480" y="490" font-family="Liberation Sans,Arial,sans-serif" font-size="12"
+        font-weight="bold" text-anchor="middle" fill="#FFFFFF">
+    Raspberry Pi 5 · BCM2712 Cortex-A76 · 8 GB RAM · Argon ONE V3 PCIe
+  </text>
+
+  <!-- EEPROM -->
+  <rect x="32" y="498" width="185" height="60" rx="4" fill="#0D1B2A"/>
+  <text x="124" y="515" font-family="Liberation Sans,Arial,sans-serif" font-size="9"
+        font-weight="bold" text-anchor="middle" fill="#F4D03F">EEPROM  BOOT_ORDER=0xf16</text>
+  <text x="124" y="530" font-family="Liberation Sans,Arial,sans-serif" font-size="8.5"
+        text-anchor="middle" fill="#95A5A6">NVMe (6) → SD (1) → restart (f)</text>
+  <text x="124" y="545" font-family="Liberation Sans,Arial,sans-serif" font-size="8"
+        text-anchor="middle" fill="#95A5A6">update: recovery.bin required (RPi5)</text>
+
+  <!-- NVMe -->
+  <rect x="227" y="498" width="170" height="60" rx="4" fill="#0D1B2A"/>
+  <text x="312" y="515" font-family="Liberation Sans,Arial,sans-serif" font-size="9"
+        font-weight="bold" text-anchor="middle" fill="#FFFFFF">NVMe SSD  (primary)</text>
+  <text x="312" y="530" font-family="Liberation Sans,Arial,sans-serif" font-size="8.5"
+        text-anchor="middle" fill="#95A5A6">nvme0n1p1  FAT32 boot</text>
+  <text x="312" y="545" font-family="Liberation Sans,Arial,sans-serif" font-size="8.5"
+        text-anchor="middle" fill="#95A5A6">nvme0n1p2  ext4 root  (116 GB)</text>
+
+  <!-- microSD -->
+  <rect x="407" y="498" width="165" height="60" rx="4" fill="#0D1B2A"/>
+  <text x="489" y="515" font-family="Liberation Sans,Arial,sans-serif" font-size="9"
+        font-weight="bold" text-anchor="middle" fill="#FFFFFF">microSD  (fallback)</text>
+  <text x="489" y="530" font-family="Liberation Sans,Arial,sans-serif" font-size="8.5"
+        text-anchor="middle" fill="#95A5A6">mmcblk0p1  FAT32 boot</text>
+  <text x="489" y="545" font-family="Liberation Sans,Arial,sans-serif" font-size="8.5"
+        text-anchor="middle" fill="#95A5A6">mmcblk0p2  ext4 root</text>
+
+  <!-- SSH -->
+  <rect x="582" y="498" width="170" height="60" rx="4" fill="#0D1B2A"/>
+  <text x="667" y="515" font-family="Liberation Sans,Arial,sans-serif" font-size="9"
+        font-weight="bold" text-anchor="middle" fill="#FFFFFF">SSH Access</text>
+  <text x="667" y="530" font-family="Liberation Sans,Arial,sans-serif" font-size="8.5"
+        text-anchor="middle" fill="#95A5A6">root@169.254.100.1</text>
+  <text x="667" y="545" font-family="Liberation Sans,Arial,sans-serif" font-size="8.5"
+        text-anchor="middle" fill="#95A5A6">ED25519 key · no password</text>
+
+  <!-- BLE -->
+  <rect x="762" y="498" width="165" height="60" rx="4" fill="#0D1B2A"/>
+  <text x="844" y="515" font-family="Liberation Sans,Arial,sans-serif" font-size="9"
+        font-weight="bold" text-anchor="middle" fill="#FFFFFF">BLE GATT  (pi-ble-status)</text>
+  <text x="844" y="530" font-family="Liberation Sans,Arial,sans-serif" font-size="8.5"
+        text-anchor="middle" fill="#95A5A6">IP · temp · uptime · hostname</text>
+  <text x="844" y="545" font-family="Liberation Sans,Arial,sans-serif" font-size="8.5"
+        text-anchor="middle" fill="#95A5A6">WiFi IP via BLE · no Ethernet needed</text>
+
+  <!-- Footer -->
+  <text x="480" y="582" font-family="Liberation Sans,Arial,sans-serif" font-size="9"
+        font-style="italic" text-anchor="middle" fill="#7F8C8D">
+    Host: Fedora 44 · x86_64 · AMD Ryzen AI 9 HX PRO 370 · 62 GB RAM · BitBake cross-compiles for aarch64
+  </text>
+
+</svg>
