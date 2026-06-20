@@ -168,6 +168,8 @@ Connect your laptop's Ethernet port directly to the Pi. No router needed — bot
 
 **BLE diagnostic + WiFi provisioning** — `pi-ble-status` advertises IP, temperature, uptime, and hostname over BLE (chars `1001`–`1005`). Char `1006` is writable: send `SSID/password` to provision wlan0 at runtime without reflashing. Useful when SSH is unreachable or WiFi credentials need updating.
 
+**wlan0 not required for boot** — `20-wlan0.network` sets `RequiredForOnline=no` so `network-online.target` does not wait for wlan0. Without it, SSH takes ~40 seconds while brcmfmac initializes the WiFi chip. eth0 is static and ready in ~5 seconds; wlan0 is optional and provisioned later via BLE.
+
 ---
 
 ## See Also

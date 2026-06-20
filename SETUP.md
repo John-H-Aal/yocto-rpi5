@@ -127,7 +127,7 @@ meta-john/
 |---|---|
 | `ssh-server-openssh` (IMAGE_FEATURES) | OpenSSH server |
 | `bluez5` + `pi-ble-status` | BLE GATT server: chars `1001`–`1005` expose IP/temp/uptime/hostname; char `1006` (writable) provisions wlan0 WiFi at runtime |
-| `wlan0-config` + `wpa-supplicant` | systemd-networkd DHCP profile for wlan0; credentials written by BLE provisioning |
+| `wlan0-config` + `wpa-supplicant` | systemd-networkd DHCP profile for wlan0 (`RequiredForOnline=no` — does not gate SSH); credentials written by BLE provisioning |
 | `eth0-networkd-config` | systemd-networkd static IP profile |
 | `ssh-keys` | Bakes authorized ED25519 key into `/root/.ssh/authorized_keys` |
 | `e2fsprogs` + `e2fsprogs-mke2fs` + `e2fsprogs-e2fsck` + `e2fsprogs-resize2fs` | Filesystem tools |

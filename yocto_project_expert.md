@@ -88,6 +88,8 @@ IMAGE_INSTALL:append = " \
 ### `wlan0-config`
 Installs `/etc/systemd/network/20-wlan0.network` with DHCP for wlan0. No credentials — WiFi is provisioned at runtime via BLE. Pulls in `wpa-supplicant` as an `RDEPENDS`.
 
+Sets `RequiredForOnline=no` in the `[Link]` section. Without this, `systemd-networkd-wait-online` blocks `network-online.target` until wlan0 appears and acquires a carrier — brcmfmac takes ~33 seconds to initialize, delaying SSH by the same amount. eth0 is static and does not have this problem; wlan0 is optional so it must not gate boot.
+
 ### `eth0-networkd-config`
 Installs `/etc/systemd/network/10-eth0.network` with a static IP config:
 

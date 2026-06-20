@@ -48,7 +48,7 @@ This is the custom layer. It contains:
 |---|---|
 | `rpi5-base-image.bb` | Defines the final NVMe image: which packages are included |
 | `eth0-networkd-config/` | Installs a systemd-networkd `.network` file for static IP on eth0 |
-| `wlan0-config/` | Installs a systemd-networkd DHCP profile for wlan0 + pulls in wpa-supplicant |
+| `wlan0-config/` | Installs a systemd-networkd DHCP profile for wlan0 + pulls in wpa-supplicant. Marked `RequiredForOnline=no` so boot doesn't wait for WiFi — SSH is ready in ~5 s instead of ~40 s |
 | `ssh-keys/` | Bakes the authorized SSH public key into `/home/root/.ssh/authorized_keys` (root's home in Yocto is `/home/root`) |
 | `pi-ble-status/` | BLE GATT server: reads IP/temp/uptime/hostname; writable char 1006 provisions WiFi |
 | `init-ifupdown/` bbappend | Configures static IP for `core-image-minimal` (no NetworkManager) |
