@@ -52,7 +52,8 @@ yocto-rpi5/
 │   ├── wic/nvme-raspberrypi.wks                   — wic layout targeting nvme0n1
 │   ├── recipes-core/images/rpi5-base-image.bb
 │   ├── recipes-connectivity/eth0-networkd-config/ — static IP via systemd-networkd
-│   ├── recipes-connectivity/pi-ble-status/        — BLE GATT diagnostic server
+│   ├── recipes-connectivity/pi-ble-status/        — BLE GATT server: diagnostics + WiFi provisioning
+│   ├── recipes-connectivity/wlan0-config/         — DHCP for wlan0 via systemd-networkd + wpa-supplicant
 │   ├── recipes-core/ssh-keys/                     — bakes authorized SSH key into image
 │   ├── recipes-core/init-ifupdown/                — static IP for minimal image
 │   ├── recipes-core/packagegroups/                — removes ofono, neard
@@ -115,13 +116,23 @@ sudo eject /dev/sdX
 ### 6. Flash NVMe (from SD, via SSH)
 
 ```bash
+# BOOT_ORDER=0xf16 boots NVMe first — zero the boot sector to force SD fallback
+ssh root@169.254.100.1 'dd if=/dev/zero of=/dev/nvme0n1p1 bs=512 count=1 && reboot'
+
 # Wait for SD to boot (uses Dropbear — StrictHostKeyChecking=no required)
 ssh-keygen -R 169.254.100.1
 until ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no root@169.254.100.1 'echo up'; do sleep 5; done
 
+# Confirm SD boot
+ssh -o StrictHostKeyChecking=no root@169.254.100.1 'cat /proc/cmdline | grep -o "root=[^ ]*"'
+# expect: root=/dev/mmcblk0p2
+
 # Pipe NVMe image directly from laptop
 bzcat build-rpi5/tmp/deploy/images/raspberrypi5/rpi5-base-image-raspberrypi5.rootfs.wic.bz2 \
-    | ssh -o StrictHostKeyChecking=no root@169.254.100.1 'dd of=/dev/nvme0n1 bs=4M && sync && reboot'
+    | ssh -o StrictHostKeyChecking=no root@169.254.100.1 'dd of=/dev/nvme0n1 bs=4M && sync'
+
+# Reboot as a separate command ('reboot' inside the pipe returns Access denied on SD image)
+ssh -o StrictHostKeyChecking=no root@169.254.100.1 reboot
 
 # Pi reboots from NVMe automatically (SD stays in as silent fallback)
 ssh-keygen -R 169.254.100.1 && ssh root@169.254.100.1
@@ -155,7 +166,7 @@ Connect your laptop's Ethernet port directly to the Pi. No router needed — bot
 
 **First-boot resize** — Yocto wic images create a fixed-size root partition. `resize-rootfs` expands it to fill the disk on first boot, runs once, then never again.
 
-**BLE diagnostic server** — `pi-ble-status` advertises IP, temperature, uptime, and hostname over BLE. Useful when networking isn't up yet and SSH is unreachable.
+**BLE diagnostic + WiFi provisioning** — `pi-ble-status` advertises IP, temperature, uptime, and hostname over BLE (chars `1001`–`1005`). Char `1006` is writable: send `SSID/password` to provision wlan0 at runtime without reflashing. Useful when SSH is unreachable or WiFi credentials need updating.
 
 ---
 
