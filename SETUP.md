@@ -297,7 +297,7 @@ ssh-keygen -R 169.254.100.1
 bzcat ~/repos/yocto-rpi5/build-rpi5/tmp/deploy/images/raspberrypi5/rpi5-base-image-raspberrypi5.rootfs.wic.bz2 \
     | ssh root@169.254.100.1 'dd of=/dev/nvme0n1 bs=4M && sync && reboot'
 
-# Step 3: Remove SD card before/during the NVMe boot (see EEPROM note in §7)
+# Step 3: Remove SD card for the first NVMe boot (see note below)
 # Step 4: Wait for NVMe to come up — resize-rootfs runs automatically on first boot
 ssh-keygen -R 169.254.100.1
 ssh root@169.254.100.1
@@ -308,7 +308,12 @@ ssh root@169.254.100.1
 
 **Why zero nvme0n1p1?** Makes the NVMe boot partition unreadable by the EEPROM bootloader, forcing fallback to SD for the next boot only. The full reflash restores a valid boot partition.
 
-**No manual cmdline.txt patch needed.** The `rpi5-base-image` recipe uses `IMAGE_POSTPROCESS_COMMAND` to patch `cmdline.txt` (root device) and `/etc/fstab` (/boot mount) inside the wic image at build time. Yocto's wic tool uses `--ondisk mmcblk0` naming by default; the patch corrects both to `nvme0n1p*` device names.
+**Why remove SD for first NVMe boot?** After a fresh `dd` flash, the RPi5 bootloader fails to boot NVMe on its first attempt when the SD card is physically present (EEPROM `BOOT_ORDER=0xf16` notwithstanding). Root cause is unknown without UART bootloader logs. Once NVMe has completed one successful boot, subsequent reboots work correctly with SD inserted. The SD card only needs to be removed for this one boot per reflash.
+
+**No manual cmdline.txt patch needed.** The `rpi5-base-image` recipe uses `IMAGE_POSTPROCESS_COMMAND` to patch `cmdline.txt` and `/etc/fstab` inside the wic image at build time:
+- `root=/dev/mmcblk0p2` → `root=/dev/nvme0n1p2`
+- `reboot=cold` appended (overrides the firmware-injected `reboot=w`, ensuring a full PCIe reset on every reboot)
+- `/dev/nvme0n11` → `/dev/nvme0n1p1` in fstab (wic's `direct.py` lacks the `p` separator for nvme devices)
 
 ---
 

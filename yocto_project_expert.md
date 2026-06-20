@@ -155,21 +155,34 @@ Yocto's wic `direct.py` imager only adds the `p` partition separator for `mmcblk
 prefix = 'p' if part.disk.startswith('mmcblk') else ''
 ```
 
-With `--ondisk nvme0n1`, wic generates `/dev/nvme0n11` (wrong) instead of `/dev/nvme0n1p1`. This affects both:
-- `cmdline.txt` in the FAT boot partition (`root=/dev/mmcblk0p2`)
-- `/etc/fstab` in the ext4 root partition (`/dev/nvme0n11 /boot`)
+With `--ondisk nvme0n1`, wic generates `/dev/nvme0n11` (wrong) instead of `/dev/nvme0n1p1`. This affects both `cmdline.txt` (`root=/dev/mmcblk0p2`) and `/etc/fstab` (`/dev/nvme0n11 /boot`).
 
-Both are patched inside the wic image at build time via `IMAGE_POSTPROCESS_COMMAND` in `rpi5-base-image.bb`. The function decompresses the wic.bz2, patches cmdline.txt using `mcopy` (mtools FAT access with `@@offset` syntax), patches fstab using `debugfs` (rm + write, since `write` fails on existing files), then recompresses with `pbzip2`. Boot FAT partition offset: sector 8192 = 4,194,304 bytes (`--align 4096` in wks = 4 MiB).
+All three issues are patched inside the wic image at build time via `IMAGE_POSTPROCESS_COMMAND` in `rpi5-base-image.bb`. The function:
+1. Decompresses with `pbzip2`
+2. Patches `cmdline.txt` using `mcopy` (mtools FAT access via `@@offset` syntax at byte 4,194,304 = sector 8192 × 512, from `--align 4096` in the wks)
+3. Appends `reboot=cold` to `cmdline.txt` (see below)
+4. Patches `/etc/fstab` using `debugfs` (`rm` then `write`, since `write` fails on existing files)
+5. Recompresses with `pbzip2`
 
-`IMAGE_POSTPROCESS_COMMAND` runs as part of `do_image_complete`, after all image types are created. The `.wic.bz2` is available via `${IMGDEPLOYDIR}/${IMAGE_LINK_NAME}.wic.bz2` (use `IMAGE_LINK_NAME`, not `IMAGE_NAME` — the latter includes `DATETIME` which won't match sstate-served files).
+`IMAGE_POSTPROCESS_COMMAND` runs as part of `do_image_complete`. Use `${IMAGE_LINK_NAME}` (not `${IMAGE_NAME}`) for the wic path — `IMAGE_NAME` includes `DATETIME` and won't match sstate-served files.
 
-## EEPROM Firmware Gotcha
+## Reboot Mode: `reboot=cold`
 
-`firmware-2712/stable/pieeprom-2026-06-17.bin` has a regression that prevents NVMe boot via the Argon ONE V3 PCIe adapter. Use `pieeprom-2026-05-26.bin` (`default` channel) instead. The 2026-06-17 binary is in the `latest` channel only.
+The RPi5 firmware injects `reboot=w` (warm reboot) at the start of the kernel command line. On a warm reboot, PCIe is not fully reset. After a large `dd` write to the NVMe, the NVMe controller has pending internal operations (garbage collection, wear leveling). A subsequent warm reboot leaves the controller in this busy state; the bootloader finds it unresponsive and falls back to SD.
 
-When applying an EEPROM update from the SD boot partition (mmcblk0p1), the post-update reboot may fail to boot NVMe if the SD card is still inserted. Remove the SD card before or immediately after the update-triggered reboot. Once NVMe is booted, reinsert the SD — it sits unmounted as a silent fallback.
+`reboot=cold` is appended to `cmdline.txt` in `IMAGE_POSTPROCESS_COMMAND`. Kernel parameters are processed left-to-right with last-value-wins semantics, so `reboot=cold` overrides the firmware-injected `reboot=w`. This forces a full PCIe reset on every reboot, ensuring the NVMe controller is in a clean state when the bootloader probes it.
 
-Placing the EEPROM update file on `nvme0n1p1` causes the bootloader to clear the entire NVMe boot partition after applying the update (all files deleted), leaving NVMe unbootable. Always place `pieeprom.upd`/`pieeprom.sig` on the SD card's boot partition (mmcblk0p1) only.
+## First Boot After Flash
+
+Despite `reboot=cold`, the RPi5 bootloader fails to boot NVMe on the very first boot after a raw `dd` flash when the SD card is physically present (with `BOOT_ORDER=0xf16`). The exact cause is unknown without UART bootloader logs. Once NVMe has completed one successful boot, subsequent reboots with SD inserted work correctly.
+
+**Workaround**: remove the SD card for the first NVMe boot after each reflash, then reinsert. The SD sits unmounted as a silent fallback.
+
+## EEPROM Firmware
+
+`firmware-2712/stable/pieeprom-2026-06-17.bin` has a regression that prevents NVMe boot via the Argon ONE V3 PCIe adapter. Use `pieeprom-2026-05-26.bin` (`default` channel).
+
+Always place `pieeprom.upd`/`pieeprom.sig` on the SD card's boot partition (mmcblk0p1), not on nvme0n1p1. Placing them on nvme0n1p1 causes the bootloader to clear the entire NVMe boot partition after applying the update.
 
 ## Known Issues / Non-Issues
 
