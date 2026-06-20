@@ -9,11 +9,12 @@
 | **Target** | Raspberry Pi 5, 8 GB RAM, Cortex-A76 (aarch64) |
 | **MACHINE** | `raspberrypi5` |
 | **DISTRO** | `poky` |
+| **Init manager** | systemd (via `DISTRO_FEATURES:append = " systemd usrmerge"`) |
 | **Kernel** | Linux 6.6.63 (from meta-raspberrypi, Scarthgap branch) |
 | **Boot device** | NVMe via Argon ONE V3 PCIe adapter (M.2 NVMe) |
-| **Fallback** | microSD (EEPROM silent fallback only) |
-| **Network** | Static link-local, eth0, `169.254.100.1/16` |
-| **SSH** | `root@169.254.100.1`, ED25519 key, no password (`debug-tweaks`) |
+| **Fallback** | microSD (EEPROM silent fallback — stays inserted) |
+| **Network** | Static link-local, eth0, `169.254.100.1/16` via systemd-networkd |
+| **SSH** | `root@169.254.100.1`, ED25519 key baked into image, no password |
 
 ## Layer Stack
 
@@ -40,6 +41,14 @@ EXTRA_IMAGE_FEATURES = "debug-tweaks ssh-server-dropbear"
 # RPi closed-source WiFi firmware — without this, bitbake errors on license check
 LICENSE_FLAGS_ACCEPTED = "synaptics-killswitch"
 
+# systemd as init manager — required for pi-ble-status and reliable service management
+# WARNING: changing this requires `bitbake -c cleansstate <image>` before rebuilding.
+# sstate will serve packages built without systemd support, causing silent failures
+# (e.g. NetworkManager failing to configure interfaces).
+DISTRO_FEATURES:append = " systemd usrmerge"
+VIRTUAL-RUNTIME_init_manager = "systemd"
+VIRTUAL-RUNTIME_initscripts = "systemd-compat-units"
+
 BB_NUMBER_THREADS = "24"
 PARALLEL_MAKE = "-j24"
 
@@ -48,63 +57,106 @@ DL_DIR = "${TOPDIR}/../downloads"
 SSTATE_DIR = "${TOPDIR}/../sstate-cache"
 ```
 
-`wic.bmap` enables sparse flashing via `bmaptool`. The `.wks` file used is the default for `raspberrypi5` from meta-raspberrypi (`sdimage-raspberrypi.wks`), which lays out a FAT32 boot partition and ext4 root.
+`wic.bmap` enables sparse flashing via `bmaptool`. The `.wks` file is `meta-john/wic/nvme-raspberrypi.wks` — a custom layout targeting `nvme0n1` (FAT32 boot + ext4 root, both `--align 4096`).
 
 ## Images
 
 ### `core-image-minimal` (staging / SD card)
-Standard OE image. SSH added via `EXTRA_IMAGE_FEATURES += "ssh-server-dropbear"` in `local.conf` — it is not present by default. Used solely to flash `rpi5-base-image` onto the NVMe from a running Pi, then discarded.
+Standard OE image. SSH added via `EXTRA_IMAGE_FEATURES += "ssh-server-dropbear"` in `local.conf`. Used solely to flash `rpi5-base-image` onto the NVMe from a running Pi. Presents an RSA host key (Dropbear); does not contain the user's ED25519 authorized key. Use `-o StrictHostKeyChecking=no` when SSHing into it.
 
 ### `rpi5-base-image` (target / NVMe)
-Defined in `meta-john/recipes-core/images/rpi5-base-image.bb`. Inherits `core-image`. Key additions over the base:
+Defined in `meta-john/recipes-core/images/rpi5-base-image.bb`. Inherits `core-image`. Key additions:
 
 ```bitbake
+IMAGE_FEATURES += "ssh-server-openssh"
+
 IMAGE_INSTALL:append = " \
-    networkmanager \
-    openssh-server \
-    e2fsprogs e2fsprogs-resize2fs \
-    bmaptool \
+    bluez5 \
+    pi-ble-status \
+    eth0-networkd-config \
+    ssh-keys \
+    e2fsprogs e2fsprogs-mke2fs e2fsprogs-e2fsck e2fsprogs-resize2fs \
     resize-rootfs \
+    bmaptool \
+    util-linux util-linux-lsblk util-linux-blkid \
+    parted curl nano \
 "
 ```
 
-`debug-tweaks` and `ssh-server-openssh` are set via `EXTRA_IMAGE_FEATURES` in `local.conf` (not in the recipe itself, to keep `local.conf` as the single override point for security posture).
-
 ## `meta-john` Recipe Details
 
-### `nm-eth0-config` (for `rpi5-base-image`)
-Installs a NetworkManager system connection keyfile to `/etc/NetworkManager/system-connections/eth0.nmconnection`. File permissions set to `0600` in `do_install` — NM refuses to load connections with looser permissions. Keyfile specifies:
+### `eth0-networkd-config`
+Installs `/etc/systemd/network/10-eth0.network` with a static IP config:
 
 ```ini
-[ipv4]
-method=manual
-address1=169.254.100.1/16
+[Match]
+Name=eth0
+
+[Network]
+Address=169.254.100.1/16
 ```
 
-No gateway, no DNS — intentional for a direct-cable link-local setup.
+systemd-networkd is enabled by default when `systemd` is in `DISTRO_FEATURES`. No gateway or DNS — intentional for a direct-cable link-local setup.
+
+**Why not NetworkManager:** NM built from sstate cache (before `DISTRO_FEATURES` included `systemd`) silently fails to configure interfaces. systemd-networkd is simpler, ships with systemd, and works correctly out of the box.
+
+### `ssh-keys`
+Installs `/root/.ssh/authorized_keys` (mode 0600, dir 0700) with the pre-defined ED25519 public key. Eliminates the need for manual key injection after each reflash. `debug-tweaks` sets `PermitEmptyPasswords yes` in sshd_config in theory, but this is unreliable with OpenSSH — baking the key is the only robust approach.
+
+### `pi-ble-status`
+A Python 3 BLE GATT server (bluez5/dbus) that advertises as the hostname and exposes read-only characteristics:
+
+| UUID suffix | Value |
+|---|---|
+| `1001` | wlan0 IP |
+| `1002` | eth0 IP |
+| `1003` | CPU temperature |
+| `1004` | Uptime |
+| `1005` | Hostname |
+
+Useful for diagnosing networking issues before SSH is reachable. Requires `bluez5`, `python3-dbus`, `python3-pygobject`, and `bluetooth.target` in systemd.
 
 ### `init-ifupdown` bbappend (for `core-image-minimal`)
-Appends a static IP stanza to `/etc/network/interfaces`. Works because `core-image-minimal` does not include NetworkManager — `init-ifupdown` owns `eth0` without conflict. Would break silently on `rpi5-base-image` because NM ignores `interfaces` by default.
+Appends a static IP stanza to `/etc/network/interfaces`. Works because `core-image-minimal` does not include NetworkManager — `init-ifupdown` owns `eth0` without conflict.
 
 ### `packagegroup-base.bbappend`
 Removes `ofono` and `neard` from the image. These are pulled in as hard `RDEPENDS` via `packagegroup-base-3g` and `packagegroup-base-nfc` respectively — `BAD_RECOMMENDATIONS` has no effect. The bbappend removes them from the packagegroup's `RDEPENDS` directly.
 
 ### `resize-rootfs`
-SysVinit/systemd service that runs `resize2fs /dev/nvme0n1p2` on first boot after `parted` expands the partition to fill the disk. Runs once and self-disables via a stamp file. Required because `wic` images are fixed-size; the 116 GB NVMe would otherwise show the image's ~2 GB root.
+systemd oneshot service that runs `resize2fs /dev/nvme0n1p2` on first boot after `parted` expands the partition to fill the disk. Runs once and self-disables via a stamp file (`/var/lib/resize-rootfs-done`). Required because `wic` images are fixed-size; the 116 GB NVMe would otherwise show the image's ~2 GB root.
 
 ## NVMe Boot Configuration
 
 EEPROM `BOOT_ORDER=0xf16`:
 
-| Nibble | Device |
+| Nibble (RTL) | Device |
 |---|---|
-| `f` | Restart loop (wraps around) |
-| `1` | SD card |
-| `6` | NVMe (PCIe) |
+| `6` | NVMe (PCIe) — tried first |
+| `1` | SD card — fallback if NVMe fails |
+| `f` | Restart loop |
 
-Evaluated right-to-left: NVMe → SD → loop. SD card is present but silent — the Pi boots from NVMe with SD inserted, useful as emergency fallback without any EEPROM re-flash.
+SD card stays permanently inserted as a silent recovery fallback. With a healthy NVMe boot partition, the SD is never selected.
 
-EEPROM update applied from the booted Pi using `rpi-eeprom-config --apply` from the `rpi-eeprom` repo (checked out alongside the layers in the project root). The Argon ONE V3 exposes the NVMe via the Pi 5's PCIe x1 interface; no additional kernel config or device tree overlay is needed — `meta-raspberrypi` on Scarthgap includes NVMe support out of the box for `raspberrypi5`.
+## EEPROM Update Procedure (RPi5 / BCM2712)
+
+Pre-built binaries are in `~/repos/yocto-rpi5/rpi-eeprom/`:
+- `pieeprom-nvme-first.bin` / `.sig` — `BOOT_ORDER=0xf16` (NVMe first)
+- `pieeprom-sd-first.bin` / `.sig` — SD first
+
+**RPi5 requires three files on mmcblk0p1 — `recovery.bin` is mandatory:**
+
+```bash
+# From a running Pi (SD or NVMe boot), mount the SD boot partition:
+mount /dev/mmcblk0p1 /mnt
+cp ~/repos/yocto-rpi5/rpi-eeprom/pieeprom-nvme-first.bin /mnt/pieeprom.upd
+cp ~/repos/yocto-rpi5/rpi-eeprom/pieeprom-nvme-first.sig /mnt/pieeprom.sig
+cp ~/repos/yocto-rpi5/rpi-eeprom/firmware-2712/default/recovery.bin /mnt/recovery.bin
+sync && umount /mnt && reboot
+```
+
+Without `recovery.bin`, the bootloader silently ignores `pieeprom.upd`. The files are placed on the **SD's** mmcblk0p1 — placing them on nvme0n1p1 causes the bootloader to wipe the entire NVMe boot partition after applying the update.
+
+Use `pieeprom-2026-05-26.bin` (`default` channel). The `2026-06-17` firmware has a regression preventing NVMe boot via the Argon ONE V3 PCIe adapter.
 
 ## Build Environment
 
@@ -115,37 +167,35 @@ source poky/oe-init-build-env build-rpi5
 bitbake rpi5-base-image
 ```
 
-`umask 022` is mandatory — the Yocto sanity checker enforces it and will abort the build if violated. Easy to forget after a fresh shell.
+**After any `DISTRO_FEATURES` change:** `bitbake -c cleansstate rpi5-base-image && bitbake rpi5-base-image`. sstate aggressively caches `do_image_complete` and package compilations — stale cached packages built without systemd support will be used silently otherwise.
 
-`BB_HASHSERVE_UPSTREAM` should be commented out if `python3-websockets` is not installed on the host — BitBake will fail trying to connect.
-
-Fedora 44 is not in Yocto's validated distro list; the warning is cosmetic.
+`BB_HASHSERVE_UPSTREAM` should be commented out if `python3-websockets` is not installed on the host.
 
 ## Flash Procedure
 
 ```bash
-# Laptop → SD (staging)
-bmaptool copy core-image-minimal-raspberrypi5.wic.bz2 /dev/sdX
+# Laptop → SD card (staging image)
+bzcat build-rpi5/tmp/deploy/images/raspberrypi5/core-image-minimal-raspberrypi5.rootfs.wic.bz2 \
+    | sudo dd of=/dev/sdX bs=4M
 
-# Pi (over SSH, SD boot) → NVMe
-scp rpi5-base-image-raspberrypi5.wic.bz2 root@169.254.100.1:/tmp/
-scp rpi5-base-image-raspberrypi5.wic.bmap root@169.254.100.1:/tmp/
-ssh root@169.254.100.1
-bmaptool copy /tmp/rpi5-base-image-raspberrypi5.wic.bz2 /dev/nvme0n1
-reboot
+# Insert SD, wait for boot (SD uses Dropbear — StrictHostKeyChecking=no required)
+ssh-keygen -R 169.254.100.1
+until ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no root@169.254.100.1 'echo up'; do sleep 5; done
+
+# Confirm SD boot
+ssh -o StrictHostKeyChecking=no root@169.254.100.1 'cat /proc/cmdline | grep -o "root=[^ ]*"'
+# expect: root=/dev/mmcblk0p2
+
+# Pipe NVMe image from laptop directly to Pi (avoids filling SD root)
+bzcat build-rpi5/tmp/deploy/images/raspberrypi5/rpi5-base-image-raspberrypi5.rootfs.wic.bz2 \
+    | ssh -o StrictHostKeyChecking=no root@169.254.100.1 'dd of=/dev/nvme0n1 bs=4M && sync && reboot'
+
+# Pi reboots — NVMe boots automatically (SD stays in as fallback)
+ssh-keygen -R 169.254.100.1 && ssh root@169.254.100.1
+# ED25519 key accepted, no password
 ```
 
-Never run `bmaptool` against a mounted device. If reflashing a live NVMe system, boot from SD first (EEPROM fallback) before writing to `nvme0n1`. See `reflash-procedure` memory for the full safe sequence.
-
-## Package Name Surprises
-
-These diverge from what you'd expect from other distros:
-
-| Package | Recipe name in poky |
-|---|---|
-| bmap-tools | `bmaptool` |
-| e2fsprogs (resize2fs only) | `e2fsprogs-resize2fs` |
-| Full e2fsprogs | `e2fsprogs` |
+Never write to `nvme0n1` while it is the running root — ext4 corruption, read-only remounts, sshd unable to generate host keys.
 
 ## NVMe-Specific Wic Fixes
 
@@ -155,38 +205,34 @@ Yocto's wic `direct.py` imager only adds the `p` partition separator for `mmcblk
 prefix = 'p' if part.disk.startswith('mmcblk') else ''
 ```
 
-With `--ondisk nvme0n1`, wic generates `/dev/nvme0n11` (wrong) instead of `/dev/nvme0n1p1`. This affects both `cmdline.txt` (`root=/dev/mmcblk0p2`) and `/etc/fstab` (`/dev/nvme0n11 /boot`).
+With `--ondisk nvme0n1`, wic generates `/dev/nvme0n11` (wrong) instead of `/dev/nvme0n1p1` in fstab, and `root=/dev/mmcblk0p2` in `cmdline.txt`. Both are patched inside the wic image at build time via `IMAGE_POSTPROCESS_COMMAND` in `rpi5-base-image.bb`:
 
-All three issues are patched inside the wic image at build time via `IMAGE_POSTPROCESS_COMMAND` in `rpi5-base-image.bb`. The function:
-1. Decompresses with `pbzip2`
-2. Patches `cmdline.txt` using `mcopy` (mtools FAT access via `@@offset` syntax at byte 4,194,304 = sector 8192 × 512, from `--align 4096` in the wks)
-3. Appends `reboot=cold` to `cmdline.txt` (see below)
-4. Patches `/etc/fstab` using `debugfs` (`rm` then `write`, since `write` fails on existing files)
-5. Recompresses with `pbzip2`
+1. Decompress with `pbzip2`
+2. Patch `cmdline.txt` using `mcopy` (mtools FAT access via `@@offset` at byte 4,194,304 = sector 8192 × 512, from `--align 4096` in the wks)
+3. Append `reboot=cold` to `cmdline.txt`
+4. Patch `/etc/fstab` using `debugfs` (`rm` then `write` — `write` fails on existing files)
+5. Recompress with `pbzip2`
 
-`IMAGE_POSTPROCESS_COMMAND` runs as part of `do_image_complete`. Use `${IMAGE_LINK_NAME}` (not `${IMAGE_NAME}`) for the wic path — `IMAGE_NAME` includes `DATETIME` and won't match sstate-served files.
+Use `${IMAGE_LINK_NAME}` (not `${IMAGE_NAME}`) for the wic path — `IMAGE_NAME` includes `DATETIME` and won't match sstate-served files.
 
 ## Reboot Mode: `reboot=cold`
 
-The RPi5 firmware injects `reboot=w` (warm reboot) at the start of the kernel command line. On a warm reboot, PCIe is not fully reset. After a large `dd` write to the NVMe, the NVMe controller has pending internal operations (garbage collection, wear leveling). A subsequent warm reboot leaves the controller in this busy state; the bootloader finds it unresponsive and falls back to SD.
+The RPi5 firmware injects `reboot=w` (warm reboot) at the start of the kernel command line. On a warm reboot, PCIe is not fully reset. After a large `dd` write to NVMe, the controller has pending internal operations; a warm reboot leaves it in a busy state and the bootloader falls back to SD.
 
-`reboot=cold` is appended to `cmdline.txt` in `IMAGE_POSTPROCESS_COMMAND`. Kernel parameters are processed left-to-right with last-value-wins semantics, so `reboot=cold` overrides the firmware-injected `reboot=w`. This forces a full PCIe reset on every reboot, ensuring the NVMe controller is in a clean state when the bootloader probes it.
+`reboot=cold` is appended to `cmdline.txt` in `IMAGE_POSTPROCESS_COMMAND`. Kernel parameters are last-value-wins, so `reboot=cold` overrides the firmware-injected `reboot=w`, ensuring a full PCIe reset on every reboot.
 
-## First Boot After Flash
+## Package Name Surprises
 
-Despite `reboot=cold`, the RPi5 bootloader fails to boot NVMe on the very first boot after a raw `dd` flash when the SD card is physically present (with `BOOT_ORDER=0xf16`). The exact cause is unknown without UART bootloader logs. Once NVMe has completed one successful boot, subsequent reboots with SD inserted work correctly.
-
-**Workaround**: remove the SD card for the first NVMe boot after each reflash, then reinsert. The SD sits unmounted as a silent fallback.
-
-## EEPROM Firmware
-
-`firmware-2712/stable/pieeprom-2026-06-17.bin` has a regression that prevents NVMe boot via the Argon ONE V3 PCIe adapter. Use `pieeprom-2026-05-26.bin` (`default` channel).
-
-Always place `pieeprom.upd`/`pieeprom.sig` on the SD card's boot partition (mmcblk0p1), not on nvme0n1p1. Placing them on nvme0n1p1 causes the bootloader to clear the entire NVMe boot partition after applying the update.
+| Package | Recipe name in poky |
+|---|---|
+| bmap-tools | `bmaptool` |
+| e2fsprogs (resize2fs only) | `e2fsprogs-resize2fs` |
+| Full e2fsprogs | `e2fsprogs` |
 
 ## Known Issues / Non-Issues
 
 - **Fedora 44 host warning** — harmless, Yocto's validated host list lags behind actual compatibility
-- **`synaptics-killswitch` license** — required for `linux-firmware-rpidistro-bcm43455` (WiFi); no workaround if you want WiFi; this build is Ethernet-only so it could be omitted, but accepting it avoids build failure if firmware gets pulled in transitively
-- **SSH host key generation on read-only rootfs** — not a problem here since the root is ext4 rw, but worth knowing: `openssh` generates host keys via a postinstall scriptlet; if rootfs is read-only at first boot, `sshd` won't start
-- **NetworkManager vs ifupdown** — NM ignores `/etc/network/interfaces` by default; the two image types each use the appropriate mechanism and must not be cross-applied
+- **`synaptics-killswitch` license** — required for `linux-firmware-rpidistro-bcm43455` (WiFi); this build is Ethernet-only but accepting it avoids build failure if firmware is pulled in transitively
+- **SSH host key generation on read-only rootfs** — not a problem here (ext4 rw), but worth knowing: `openssh` generates host keys via postinstall; read-only rootfs at first boot = sshd won't start
+- **systemd-networkd + NetworkManager conflict** — do not enable both; they fight over the interface. If both are in `multi-user.target.wants` with no `.network` config file for networkd and a broken NM, neither will configure eth0 and the failure is silent
+- **`debug-tweaks` + OpenSSH `PermitEmptyPasswords`** — unreliable; bake the authorized key into the image via `ssh-keys` recipe instead

@@ -47,7 +47,9 @@ This is the custom layer. It contains:
 | Recipe | Purpose |
 |---|---|
 | `rpi5-base-image.bb` | Defines the final NVMe image: which packages are included |
-| `nm-eth0-config/` | Installs a NetworkManager keyfile for static IP on eth0 |
+| `eth0-networkd-config/` | Installs a systemd-networkd `.network` file for static IP on eth0 |
+| `ssh-keys/` | Bakes the authorized SSH public key into `/root/.ssh/authorized_keys` |
+| `pi-ble-status/` | BLE GATT server that broadcasts IP, temperature, uptime, and hostname |
 | `init-ifupdown/` bbappend | Configures static IP for `core-image-minimal` (no NetworkManager) |
 | `packagegroup-base.bbappend` | Removes `ofono` and `neard` (unwanted modem/NFC daemons) |
 | `resize-rootfs/` | First-boot script that expands the root partition to fill the drive |
@@ -57,15 +59,17 @@ This is the custom layer. It contains:
 The project builds two images, used in sequence:
 
 ### 1. `core-image-minimal`
-A minimal image flashed to the SD card. Its only job is to boot the Pi, give SSH access, and flash the real image to the NVMe drive using `bmaptool`. Includes `ssh-server-dropbear` via `EXTRA_IMAGE_FEATURES`.
+A minimal image flashed to the SD card. Its only job is to boot the Pi, give SSH access, and flash the real image to the NVMe drive. Includes `ssh-server-dropbear` via `EXTRA_IMAGE_FEATURES`.
 
 ### 2. `rpi5-base-image`
 The permanent image, built by `meta-john`. Runs from NVMe. Includes:
-- `networkmanager` with a static IP keyfile
-- `openssh-server`
-- `e2fsprogs-resize2fs` for filesystem resize
+- `openssh-server` (via `IMAGE_FEATURES`)
+- `systemd-networkd` with a static IP config file
+- Your SSH public key pre-installed
+- `e2fsprogs` for filesystem tools
 - `bmaptool` for flashing
-- The auto-resize-rootfs init script
+- `pi-ble-status` — BLE diagnostic server
+- The auto-resize-rootfs service
 
 ## Key `local.conf` Settings
 
@@ -75,6 +79,11 @@ DISTRO = "poky"
 IMAGE_FSTYPES = "wic.bz2 wic.bmap"
 EXTRA_IMAGE_FEATURES = "debug-tweaks ssh-server-dropbear"
 LICENSE_FLAGS_ACCEPTED = "synaptics-killswitch"   # required for RPi WiFi firmware
+
+# Use systemd as init manager (required for pi-ble-status and service management)
+DISTRO_FEATURES:append = " systemd usrmerge"
+VIRTUAL-RUNTIME_init_manager = "systemd"
+
 BB_NUMBER_THREADS = "24"
 PARALLEL_MAKE = "-j24"
 ```
@@ -100,31 +109,46 @@ Subsequent builds are fast because Yocto has two caches:
 
 ## Networking
 
-The Pi has a static IP `169.254.100.1/16` on `eth0` — link-local range, direct cable to laptop (no router). The laptop's Ethernet interface (`enp195s0f0`) uses `169.254.163.154/16`.
+The Pi has a static IP `169.254.100.1/16` on `eth0` — link-local range, direct cable to laptop (no router). The laptop's Ethernet interface uses `169.254.x.x/16`.
 
-For `rpi5-base-image`, the static IP is configured via a NetworkManager keyfile at `/etc/NetworkManager/system-connections/eth0.nmconnection` (permissions must be `0600` — NM refuses to load it otherwise).
+For `rpi5-base-image`, the static IP is configured via a systemd-networkd `.network` file installed by the `eth0-networkd-config` recipe:
+
+```ini
+[Match]
+Name=eth0
+
+[Network]
+Address=169.254.100.1/16
+```
 
 For `core-image-minimal`, it's configured via `/etc/network/interfaces` using `init-ifupdown`.
+
+**Important:** Do not use NetworkManager with a systemd init manager built from sstate cache — NM may be cached without systemd integration and silently fail to configure interfaces. systemd-networkd is simpler and more reliable here.
 
 ## NVMe Boot
 
 The Pi's EEPROM boot order is set to `0xf16`:
-- `1` = SD card
-- `6` = NVMe
+- `6` (rightmost) = NVMe — tried first
+- `1` = SD card — fallback if NVMe fails
 - `f` = restart loop
 
-`0xf16` means: try NVMe first, fall back to SD, loop. This is set using `rpi-eeprom-config` tools from the `rpi-eeprom` repository.
+This is set using pre-built EEPROM binaries in the `rpi-eeprom/` directory. The SD card stays inserted as a silent fallback — it does not interfere with normal NVMe boots.
 
 ## Flash Procedure (Summary)
 
 ```bash
-# On laptop: flash SD
-bmaptool copy core-image-minimal-raspberrypi5.wic.bz2 /dev/sdX
+# Laptop → SD card
+bzcat core-image-minimal-raspberrypi5.rootfs.wic.bz2 | sudo dd of=/dev/sdX bs=4M
 
-# On Pi (over SSH): flash NVMe
-bmaptool copy rpi5-base-image-raspberrypi5.wic.bz2 /dev/nvme0n1
+# Insert SD, boot Pi, SSH in
+until ssh -o StrictHostKeyChecking=no root@169.254.100.1 'echo up'; do sleep 5; done
 
-# Remove SD, reboot — Pi comes up from NVMe
+# Pipe NVMe image directly from laptop to Pi
+bzcat rpi5-base-image-raspberrypi5.rootfs.wic.bz2 \
+    | ssh -o StrictHostKeyChecking=no root@169.254.100.1 'dd of=/dev/nvme0n1 bs=4M && sync && reboot'
+
+# Pi reboots — comes up from NVMe automatically (SD stays in as fallback)
+ssh-keygen -R 169.254.100.1 && ssh root@169.254.100.1
 ```
 
 ## Gotchas Worth Knowing
@@ -134,3 +158,5 @@ bmaptool copy rpi5-base-image-raspberrypi5.wic.bz2 /dev/nvme0n1
 - `resize2fs` lives in `e2fsprogs-resize2fs`, not `e2fsprogs`
 - `ofono` and `neard` must be removed via a `packagegroup-base.bbappend` — they're hard `RDEPENDS`, not recommendations, so `BAD_RECOMMENDATIONS` won't remove them
 - The Fedora 44 "not a validated distro" warning is harmless
+- When changing `DISTRO_FEATURES` (e.g. adding `systemd`), run `bitbake -c cleansstate <image>` before rebuilding — sstate can serve stale packages built without systemd support
+- SD image (core-image-minimal) uses Dropbear and presents an RSA host key; NVMe image uses OpenSSH with your ED25519 key baked in — always use `StrictHostKeyChecking=no` when SSHing into the SD image

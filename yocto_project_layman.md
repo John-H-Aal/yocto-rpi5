@@ -12,8 +12,8 @@ The end result is a headless Linux server: no screen, no keyboard, controlled en
 |---|---|
 | **Raspberry Pi 5 (8 GB)** | The small computer being set up. About the size of a deck of cards. |
 | **Argon ONE V3 case** | A metal case for the Pi that adds an M.2 NVMe slot — a slot for a fast SSD. |
-| **NVMe SSD** | The solid-state drive the Pi eventually boots from. Much faster than an SD card. |
-| **microSD card** | A temporary stepping stone used only during initial setup. |
+| **NVMe SSD** | The solid-state drive the Pi boots from. Much faster than an SD card. |
+| **microSD card** | A recovery fallback — stays inserted in the Pi as a silent spare. |
 | **Fedora laptop (x86_64)** | John's laptop, used to build the operating system image. |
 | **Ethernet cable** | How the laptop and Pi talk to each other — no router, direct cable. |
 
@@ -31,9 +31,10 @@ The custom OS is intentionally minimal. It contains:
 
 - A Linux kernel (the core of the operating system)
 - An SSH server (so you can log in remotely)
-- NetworkManager (to handle the network connection)
+- A networking stack that gives the Pi a fixed IP address on boot
 - Tools for managing storage (formatting, partitioning, copying)
 - A script that automatically expands the filesystem to fill the drive on first boot
+- A Bluetooth Low Energy (BLE) service that broadcasts the Pi's IP address, temperature, and uptime — useful for diagnostics when the network isn't yet up
 
 There is no desktop, no browser, no GUI of any kind. It does exactly one job: run as a small networked server.
 
@@ -59,12 +60,13 @@ Pi running from SD
    ▼
 NVMe SSD has the OS
    │
-   │  Remove SD card, reboot
+   │  Reboot — Pi comes up from NVMe automatically
    ▼
 Pi running from NVMe (permanent state)
+SD card stays inserted as a silent recovery fallback
 ```
 
-The SD card is only used as a temporary tool to get the OS onto the faster NVMe drive. Once that's done, the SD card is removed and the Pi boots from NVMe every time.
+The SD card is used as a temporary tool to get the OS onto the faster NVMe drive, and then remains in the Pi as a recovery option in case the NVMe ever fails to boot.
 
 ## How the laptop and Pi communicate
 

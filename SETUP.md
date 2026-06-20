@@ -18,7 +18,7 @@ Build a custom embedded Linux image for Raspberry Pi 5 with NVMe boot support us
 | Root filesystem | `nvme0n1p2` — `rpi5-base-image`, 116 GB available |
 | SD card | Silent fallback — `core-image-minimal` on `mmcblk0` |
 | Kernel | Linux 6.6.63, loaded from NVMe boot partition (`nvme0n1p1`) |
-| Network | Static IP `169.254.100.1/16` on `eth0` via NetworkManager |
+| Network | Static IP `169.254.100.1/16` on `eth0` via systemd-networkd |
 | Laptop interface | `enp195s0f0`, `169.254.163.154/16` (link-local, no DHCP needed) |
 
 ---
@@ -87,25 +87,34 @@ meta-john/
 ├── conf/
 │   └── layer.conf
 ├── wic/
-│   └── nvme-raspberrypi.wks               — wic layout targeting nvme0n1
+│   └── nvme-raspberrypi.wks                    — wic layout targeting nvme0n1
 ├── recipes-connectivity/
-│   └── nm-eth0-config/
-│       ├── nm-eth0-config_1.0.bb          — installs NM connection profile
+│   ├── eth0-networkd-config/
+│   │   ├── eth0-networkd-config_1.0.bb         — installs systemd-networkd profile
+│   │   └── files/
+│   │       └── 10-eth0.network                 — static IP 169.254.100.1/16
+│   └── pi-ble-status/
+│       ├── pi-ble-status_1.0.bb                — BLE GATT diagnostic server
 │       └── files/
-│           └── eth0-static.nmconnection   — static IP 169.254.100.1/16
+│           ├── pi-ble-status.py
+│           └── pi-ble-status.service
 ├── recipes-core/
 │   ├── images/
-│   │   └── rpi5-base-image.bb             — NVMe target image
+│   │   └── rpi5-base-image.bb                  — NVMe target image
+│   ├── ssh-keys/
+│   │   ├── ssh-keys_1.0.bb                     — bakes authorized_keys into image
+│   │   └── files/
+│   │       └── authorized_keys
 │   ├── init-ifupdown/
-│   │   ├── init-ifupdown_%.bbappend       — static IP for core-image-minimal
+│   │   ├── init-ifupdown_%.bbappend            — static IP for core-image-minimal
 │   │   └── files/
 │   │       └── interfaces
 │   ├── packagegroups/
-│   │   └── packagegroup-base.bbappend     — removes ofono/neard from base
+│   │   └── packagegroup-base.bbappend          — removes ofono/neard from base
 │   └── resize-rootfs/
-│       ├── resize-rootfs_1.0.bb           — first-boot partition resize
+│       ├── resize-rootfs_1.0.bb                — first-boot partition resize
 │       └── files/
-│           └── resize-rootfs              — init script
+│           └── resize-rootfs                   — init script
 ```
 
 ### `rpi5-base-image.bb` — packages
@@ -113,7 +122,9 @@ meta-john/
 | Package | Purpose |
 |---|---|
 | `ssh-server-openssh` (IMAGE_FEATURES) | OpenSSH server |
-| `networkmanager` + `nm-eth0-config` | Networking with static IP |
+| `bluez5` + `pi-ble-status` | BLE GATT server exposing IP, temp, uptime, hostname |
+| `eth0-networkd-config` | systemd-networkd static IP profile |
+| `ssh-keys` | Bakes authorized ED25519 key into `/root/.ssh/authorized_keys` |
 | `e2fsprogs` + `e2fsprogs-mke2fs` + `e2fsprogs-e2fsck` + `e2fsprogs-resize2fs` | Filesystem tools |
 | `bmaptool` | Image flashing |
 | `util-linux` (lsblk, blkid) | Block device tools |
@@ -127,7 +138,7 @@ meta-john/
 | Image | Method | Why |
 |---|---|---|
 | `core-image-minimal` | `init-ifupdown` bbappend | No NetworkManager — ifupdown handles eth0 |
-| `rpi5-base-image` | NetworkManager `.nmconnection` file | NM ignores `/etc/network/interfaces` |
+| `rpi5-base-image` | systemd-networkd `10-eth0.network` | Reliable with systemd init; NM fails silently from sstate cache |
 
 Both result in `eth0` at `169.254.100.1/16` on boot.
 
@@ -180,6 +191,8 @@ meta-john
 | `DISTRO` | `poky` | Reference distro |
 | `IMAGE_FSTYPES` | `wic.bz2 wic.bmap` | Partition-aware image for flashing |
 | `EXTRA_IMAGE_FEATURES` | `debug-tweaks ssh-server-dropbear` | Empty root password + SSH on minimal image |
+| `DISTRO_FEATURES:append` | `systemd usrmerge` | systemd as init manager (required for pi-ble-status) |
+| `VIRTUAL-RUNTIME_init_manager` | `systemd` | Selects systemd over sysvinit |
 | `LICENSE_FLAGS_ACCEPTED` | `synaptics-killswitch` | Required for RPi WiFi firmware in packagegroup |
 | `BB_NUMBER_THREADS` | `24` | Ryzen AI 9 HX PRO 370 thread count |
 | `PARALLEL_MAKE` | `-j24` | Per-recipe make parallelism |
@@ -208,7 +221,7 @@ bitbake rpi5-base-image       # NVMe target image (openssh, NM, full tooling)
 | `synaptics-killswitch` license | Must add `LICENSE_FLAGS_ACCEPTED` for RPi WiFi firmware |
 | `ssh-server-*` not in `core-image-minimal` | Must add to `EXTRA_IMAGE_FEATURES` explicitly |
 | `ofono` hard dependency via `packagegroup-base-3g` | Remove via `packagegroup-base.bbappend` |
-| NetworkManager ignores `/etc/network/interfaces` | Use `.nmconnection` keyfile for `rpi5-base-image` |
+| NetworkManager fails silently after `DISTRO_FEATURES` change | NM from sstate cache lacks systemd integration; use systemd-networkd + `.network` file instead; run `cleansstate` after changing `DISTRO_FEATURES` |
 
 ---
 
@@ -250,37 +263,42 @@ Power on
 
 ## 7. EEPROM Boot Order
 
-The rpi-eeprom repo contains firmware binaries and tools. To update the EEPROM:
+The `rpi-eeprom/` directory contains pre-built firmware binaries and update tooling.
+
+**BOOT_ORDER values (read right to left):** `0x6` = NVMe, `0x1` = SD, `0xf` = restart loop.  
+`0xf16` = NVMe first → SD fallback → restart.
+
+Pre-built binaries:
+- `rpi-eeprom/pieeprom-nvme-first.bin` / `.sig` — `BOOT_ORDER=0xf16` ← use this
+- `rpi-eeprom/pieeprom-sd-first.bin` / `.sig` — SD first
+
+**RPi5 (BCM2712) requires `recovery.bin` — without it the bootloader silently ignores `pieeprom.upd`.**
+
+To apply from a running Pi (SD or NVMe boot, SD card must be inserted):
 
 ```bash
-cd ~/repos/yocto-rpi5/rpi-eeprom
-
-# Use firmware-2712/stable/pieeprom-2026-05-26.bin — NOT 2026-06-17.
-# The 2026-06-17 firmware has a regression that prevents NVMe boot via the
-# Argon ONE V3 PCIe adapter. The 2026-05-26 (default) version works correctly.
-
-printf '[all]\nBOOT_UART=1\nBOOT_ORDER=0xf16\nNET_INSTALL_AT_POWER_ON=1\n' \
-    > /tmp/bootconf.txt
-
-python3 rpi-eeprom-config \
-    --config /tmp/bootconf.txt \
-    --out /tmp/pieeprom.upd \
-    firmware-2712/stable/pieeprom-2026-05-26.bin
-
-python3 rpi-eeprom-config /tmp/pieeprom.upd   # verify before applying
-
-bash rpi-eeprom-digest -i /tmp/pieeprom.upd -o /tmp/pieeprom.sig
-
-scp /tmp/pieeprom.upd /tmp/pieeprom.sig root@169.254.100.1:/boot/
-
-ssh root@169.254.100.1 'sync && reboot'
+# On the Pi:
+mount /dev/mmcblk0p1 /mnt
+cp /tmp/pieeprom-nvme-first.bin /mnt/pieeprom.upd
+cp /tmp/pieeprom-nvme-first.sig /mnt/pieeprom.sig
+cp /tmp/recovery.bin /mnt/recovery.bin
+sync && umount /mnt && reboot
 ```
 
-The bootloader finds `pieeprom.upd` on the SD boot partition, applies the update, and reboots.
+Or pipe all three from the laptop first:
 
-**BOOT_ORDER values (read right to left):** `0x1` = SD, `0x6` = NVMe, `0xf` = restart loop.
+```bash
+scp rpi-eeprom/pieeprom-nvme-first.bin \
+    rpi-eeprom/pieeprom-nvme-first.sig \
+    rpi-eeprom/firmware-2712/default/recovery.bin \
+    root@169.254.100.1:/tmp/
+```
 
-**Important:** After an EEPROM update, the Pi reboots into NVMe-first mode. If the SD card is still inserted, the post-update reboot may fail to boot NVMe (the SD confuses the firmware during this transition). Remove the SD card before or immediately after the reboot that applies the EEPROM update. Reinsert it once NVMe is booted — it sits unmounted as a silent fallback.
+The bootloader applies the update and reboots automatically. Files are cleared from mmcblk0p1 after the update.
+
+**Always place update files on `mmcblk0p1` (SD), never on `nvme0n1p1`.** Placing them on nvme0n1p1 causes the bootloader to wipe the entire NVMe boot partition after applying the update.
+
+**Firmware version:** Use `pieeprom-2026-05-26.bin` (`default` channel). The `2026-06-17` firmware has a regression preventing NVMe boot via the Argon ONE V3 PCIe adapter.
 
 ---
 
@@ -289,26 +307,32 @@ The bootloader finds `pieeprom.upd` on the SD boot partition, applies the update
 **Always flash from SD, never while NVMe is the running root** — writing to a mounted root corrupts the filesystem.
 
 ```bash
-# Step 1: Force SD boot by zeroing the NVMe boot sector, then reboot
-ssh root@169.254.100.1 'dd if=/dev/zero of=/dev/nvme0n1p1 bs=512 count=1 && reboot'
+# Step 1: Insert SD card and reboot (BOOT_ORDER=0xf16 — NVMe first, but SD boots
+#         when NVMe is being reflashed and Pi was rebooted from NVMe session)
+# If currently on NVMe: ssh root@169.254.100.1 'reboot'  (then insert SD)
+# If Pi is off: just insert SD and power on
 
-# Step 2: Wait for SD to come up, then pipe image directly from laptop
+# Step 2: Wait for SD boot — uses Dropbear (RSA host key), NOT your ED25519 key
 ssh-keygen -R 169.254.100.1
+until ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no root@169.254.100.1 'echo up'; do sleep 5; done
+
+# Confirm SD boot
+ssh -o StrictHostKeyChecking=no root@169.254.100.1 'cat /proc/cmdline | grep -o "root=[^ ]*"'
+# expect: root=/dev/mmcblk0p2
+
+# Step 3: Pipe NVMe image directly from laptop to Pi
 bzcat ~/repos/yocto-rpi5/build-rpi5/tmp/deploy/images/raspberrypi5/rpi5-base-image-raspberrypi5.rootfs.wic.bz2 \
-    | ssh root@169.254.100.1 'dd of=/dev/nvme0n1 bs=4M && sync && reboot'
+    | ssh -o StrictHostKeyChecking=no root@169.254.100.1 'dd of=/dev/nvme0n1 bs=4M && sync && reboot'
 
-# Step 3: Remove SD card for the first NVMe boot (see note below)
-# Step 4: Wait for NVMe to come up — resize-rootfs runs automatically on first boot
-ssh-keygen -R 169.254.100.1
-ssh root@169.254.100.1
-# Reinsert SD card — it will appear as mmcblk0 unmounted, available as fallback
+# Step 4: Pi reboots — NVMe boots automatically (SD stays in as silent fallback)
+# resize-rootfs runs on first NVMe boot
+ssh-keygen -R 169.254.100.1 && ssh root@169.254.100.1
+# ED25519 key accepted, no password
 ```
 
 **Why pipe instead of scp to /tmp?** Avoids filling the SD root filesystem. The image streams directly from the laptop into dd on the Pi.
 
-**Why zero nvme0n1p1?** Makes the NVMe boot partition unreadable by the EEPROM bootloader, forcing fallback to SD for the next boot only. The full reflash restores a valid boot partition.
-
-**Why remove SD for first NVMe boot?** After a fresh `dd` flash, the RPi5 bootloader fails to boot NVMe on its first attempt when the SD card is physically present (EEPROM `BOOT_ORDER=0xf16` notwithstanding). Root cause is unknown without UART bootloader logs. Once NVMe has completed one successful boot, subsequent reboots work correctly with SD inserted. The SD card only needs to be removed for this one boot per reflash.
+**SD card SSH note:** The SD image (core-image-minimal) uses Dropbear and presents an RSA host key. Your ED25519 key is not in the SD image. Always use `-o StrictHostKeyChecking=no` for SD SSH sessions.
 
 **No manual cmdline.txt patch needed.** The `rpi5-base-image` recipe uses `IMAGE_POSTPROCESS_COMMAND` to patch `cmdline.txt` and `/etc/fstab` inside the wic image at build time:
 - `root=/dev/mmcblk0p2` → `root=/dev/nvme0n1p2`
@@ -342,5 +366,5 @@ bitbake rpi5-base-image
 | wic generates `nvme0n11` instead of `nvme0n1p1` | `direct.py` only adds `p` separator for `mmcblk` devices. Fixed via `IMAGE_POSTPROCESS_COMMAND` in `rpi5-base-image.bb` using `debugfs` to patch `/etc/fstab` and `mcopy` to patch `cmdline.txt` inside the wic image. |
 | Yocto sstate mirror disabled | Enable after `sudo dnf install python3-websockets` and uncommenting `BB_HASHSERVE_UPSTREAM` in `local.conf` |
 | Poky WARNING in MOTD | Remove `/etc/motd` in `rpi5-base-image.bb` if desired |
-| `meta-john` layer shows `<unknown>` revision | Not a git repo — `git init` in `meta-john/` to fix |
-| WiFi/Bluetooth present but unused | `wpa_supplicant` and `bluetoothd` run but do nothing — leave for future experimentation |
+| Changing `DISTRO_FEATURES` requires full cleansstate | Run `bitbake -c cleansstate rpi5-base-image && bitbake rpi5-base-image` — sstate serves stale packages built without systemd support, causing silent failures (e.g. NM not configuring eth0) |
+| BLE available on Pi | `pi-ble-status` broadcasts IP (wlan0/eth0), CPU temp, uptime, hostname — useful diagnostic when SSH is unreachable. Pi BT MAC: D8:3A:DD:E6:3E:9C |

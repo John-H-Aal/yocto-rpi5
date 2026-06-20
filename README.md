@@ -11,7 +11,7 @@ Headless, SSH-only, booting from NVMe via Argon ONE V3 PCIe enclosure.
 |---|---|
 | SBC | Raspberry Pi 5, 8 GB RAM |
 | Enclosure | Argon ONE V3 PCIe |
-| Storage | NVMe via PCIe FFC connector (primary) + microSD (fallback) |
+| Storage | NVMe via PCIe FFC connector (primary) + microSD (silent fallback) |
 | Network | Direct Ethernet to host laptop — no router, no switch |
 
 ---
@@ -39,6 +39,8 @@ Power on
               └── root=/dev/mmcblk0p2 (core-image-minimal)
 ```
 
+SD card stays inserted permanently — it does not interfere with NVMe boot.
+
 ---
 
 ## Layer Structure
@@ -47,12 +49,14 @@ Power on
 yocto-rpi5/
 ├── build-rpi5/conf/        — local.conf, bblayers.conf
 ├── meta-john/              — custom layer (git submodule)
-│   ├── wic/nvme-raspberrypi.wks               — custom wic layout targeting nvme0n1
+│   ├── wic/nvme-raspberrypi.wks                   — wic layout targeting nvme0n1
 │   ├── recipes-core/images/rpi5-base-image.bb
-│   ├── recipes-connectivity/nm-eth0-config/   — static IP via NetworkManager
-│   ├── recipes-core/init-ifupdown/            — static IP for minimal image
-│   ├── recipes-core/packagegroups/            — removes ofono, neard
-│   └── recipes-core/resize-rootfs/           — auto-expands root on first boot
+│   ├── recipes-connectivity/eth0-networkd-config/ — static IP via systemd-networkd
+│   ├── recipes-connectivity/pi-ble-status/        — BLE GATT diagnostic server
+│   ├── recipes-core/ssh-keys/                     — bakes authorized SSH key into image
+│   ├── recipes-core/init-ifupdown/                — static IP for minimal image
+│   ├── recipes-core/packagegroups/                — removes ofono, neard
+│   └── recipes-core/resize-rootfs/                — auto-expands root on first boot
 ├── SETUP.md                — full build and reflash procedure
 └── boot.log                — dmesg from first clean NVMe boot
 ```
@@ -111,17 +115,16 @@ sudo eject /dev/sdX
 ### 6. Flash NVMe (from SD, via SSH)
 
 ```bash
-# Force SD boot by zeroing the NVMe boot sector, then reboot
-ssh root@169.254.100.1 'dd if=/dev/zero of=/dev/nvme0n1p1 bs=512 count=1 && reboot'
-
-# Wait for SD to come up, then pipe image directly from laptop
+# Wait for SD to boot (uses Dropbear — StrictHostKeyChecking=no required)
 ssh-keygen -R 169.254.100.1
-bzcat build-rpi5/tmp/deploy/images/raspberrypi5/rpi5-base-image-raspberrypi5.rootfs.wic.bz2 \
-    | ssh root@169.254.100.1 'dd of=/dev/nvme0n1 bs=4M && sync && reboot'
+until ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no root@169.254.100.1 'echo up'; do sleep 5; done
 
-# Remove the SD card for the first NVMe boot — the bootloader fails to pick NVMe on
-# first boot after a raw dd flash when SD is physically present (cause unknown without
-# UART logs). Remove SD, let NVMe boot once, then reinsert — stays unmounted as fallback.
+# Pipe NVMe image directly from laptop
+bzcat build-rpi5/tmp/deploy/images/raspberrypi5/rpi5-base-image-raspberrypi5.rootfs.wic.bz2 \
+    | ssh -o StrictHostKeyChecking=no root@169.254.100.1 'dd of=/dev/nvme0n1 bs=4M && sync && reboot'
+
+# Pi reboots from NVMe automatically (SD stays in as silent fallback)
+ssh-keygen -R 169.254.100.1 && ssh root@169.254.100.1
 ```
 
 Root partition auto-expands to fill the NVMe on first boot.
@@ -131,7 +134,7 @@ Root partition auto-expands to fill the NVMe on first boot.
 ## SSH Access
 
 ```bash
-ssh root@169.254.100.1   # no password
+ssh root@169.254.100.1   # ED25519 key, no password
 ```
 
 Connect your laptop's Ethernet port directly to the Pi. No router needed — both sides use `169.254.0.0/16` link-local addressing.
@@ -140,15 +143,19 @@ Connect your laptop's Ethernet port directly to the Pi. No router needed — bot
 
 ## Key Design Decisions
 
-**Static IP over DHCP** — dnsmasq on the host had no DHCP range configured. Link-local static IP (`169.254.100.1/16`) is simpler, more reliable, and needs no infrastructure.
+**Static IP over DHCP** — link-local static IP (`169.254.100.1/16`) needs no infrastructure and is consistent across reboots.
 
-**Two network config approaches** — `core-image-minimal` uses `init-ifupdown` (no NetworkManager). `rpi5-base-image` uses a NetworkManager keyfile — NM ignores `/etc/network/interfaces`.
+**systemd-networkd over NetworkManager** — NM built from sstate cache (before `DISTRO_FEATURES` included `systemd`) silently fails to configure interfaces. systemd-networkd with a `.network` file is simpler and reliable.
 
-**NVMe-first EEPROM** — boot order `0xf16` (NVMe → SD → restart). SD card stays in place as silent recovery fallback.
+**SSH key baked into image** — `debug-tweaks` + OpenSSH `PermitEmptyPasswords` is unreliable. The `ssh-keys` recipe installs `authorized_keys` at build time.
 
-**Always flash from SD** — never write to NVMe while it is the running root. The reflash procedure forces SD boot first by zeroing the NVMe boot sector.
+**NVMe-first EEPROM** — boot order `0xf16` (NVMe → SD → restart). SD card stays inserted as silent recovery fallback — no need to remove it between normal reboots.
 
-**First-boot resize** — Yocto wic images create a fixed-size root partition. `resize-rootfs` init script expands it to fill the disk on first boot, runs once, then never again.
+**Always flash from SD** — never write to NVMe while it is the running root. Insert SD (boots automatically as SD-first fallback) then pipe the image from the laptop.
+
+**First-boot resize** — Yocto wic images create a fixed-size root partition. `resize-rootfs` expands it to fill the disk on first boot, runs once, then never again.
+
+**BLE diagnostic server** — `pi-ble-status` advertises IP, temperature, uptime, and hostname over BLE. Useful when networking isn't up yet and SSH is unreachable.
 
 ---
 
