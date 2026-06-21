@@ -3,6 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      network: host
     volumes:
       # Named volume — Docker sstate is separate from native sstate (different host tools =
       # different hashes; native sstate-cache/ is NOT reusable inside Docker).
