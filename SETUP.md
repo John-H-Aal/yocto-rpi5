@@ -428,7 +428,7 @@ docker compose run yocto-builder
 # Inside the container:
 umask 022
 bitbake rpi5-base-image      # builds rootfs + wic + ext4
-bitbake rauc-bundle          # assembles signed .raucb update bundle
+bitbake rpi5-rauc-bundle     # assembles signed .raucb update bundle
 ```
 
 Built artifacts land in `build-rpi5/tmp/deploy/images/raspberrypi5/`.  
@@ -460,7 +460,7 @@ cp *.pem meta-john/files/rauc-keys/
 ls meta-john/files/rauc-keys/
 ```
 
-Keys must exist before running `bitbake rauc-bundle`.
+Keys must exist before running `bitbake rpi5-rauc-bundle`.
 
 ### 11.4 Partition layout
 
