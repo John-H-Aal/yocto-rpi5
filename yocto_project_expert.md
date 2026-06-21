@@ -11,8 +11,8 @@
 | **DISTRO** | `poky` |
 | **Init manager** | systemd (via `DISTRO_FEATURES:append = " systemd usrmerge"`) |
 | **Kernel** | Linux 6.6.63 (from meta-raspberrypi, Scarthgap branch) |
-| **Boot device** | NVMe via Argon ONE V3 PCIe adapter (M.2 NVMe) |
-| **Fallback** | microSD (EEPROM silent fallback — stays inserted) |
+| **Boot device** | NVMe via Argon ONE V3 PCIe adapter (M.2 NVMe), RAUC A/B slots, firmware `tryboot` (no U-Boot) |
+| **Recovery** | microSD — SD-first EEPROM (`0xf61`); insert for recovery/reflash, remove to run NVMe |
 | **Network** | Static link-local, eth0, `169.254.100.1/16` via systemd-networkd |
 | **SSH** | `root@169.254.100.1`, ED25519 key baked into image, no password |
 
@@ -24,8 +24,13 @@ meta-openembedded/meta-oe      # Scarthgap branch
 meta-openembedded/meta-python  # Scarthgap branch
 meta-openembedded/meta-networking  # Scarthgap branch
 meta-raspberrypi/              # Scarthgap branch — RPi BSP, kernel, firmware
+meta-rauc/                     # Scarthgap branch — RAUC core + bbclass
+meta-rauc-community/meta-rauc-raspberrypi  # RAUC RPi integration
 meta-john/                     # Custom layer (git submodule → github.com/John-H-Aal/meta-john)
 ```
+
+> Note: `meta-lts-mixins` was previously in the stack solely to backport the Scarthgap U-Boot recipe.
+> With U-Boot dropped (firmware `tryboot` instead), it has been removed.
 
 Declared in `build-rpi5/conf/bblayers.conf`. `meta-john` is last and takes priority in override resolution.
 
@@ -57,7 +62,18 @@ DL_DIR = "${TOPDIR}/../downloads"
 SSTATE_DIR = "${TOPDIR}/../sstate-cache"
 ```
 
-`wic.bmap` enables sparse flashing via `bmaptool`. The `.wks` file is `meta-john/wic/nvme-raspberrypi.wks` — a custom layout targeting `nvme0n1` (FAT32 boot + ext4 root, both `--align 4096`).
+`wic.bmap` enables sparse flashing via `bmaptool`. The `.wks` file is
+`meta-john/wic/rauc-raspberrypi-tryboot.wks` — a GPT A/B layout targeting `nvme0n1`, all partitions
+`--align 4096`:
+
+| Part | Label | FS | Size | Purpose |
+|---|---|---|---|---|
+| p1 | `bootsel` | vfat | 64 MB | `autoboot.txt` selector — stable, never written by RAUC |
+| p2 | `boot-a` | vfat | 256 MB | Slot A boot files (kernel, dtb, config.txt, cmdline-*) |
+| p3 | `boot-b` | vfat | 256 MB | Slot B boot files (cloned from p2 at wic build) |
+| p4 | `rootfs-a` | ext4 | 4 GB | RAUC rootfs slot A |
+| p5 | `rootfs-b` | ext4 | 4 GB | RAUC rootfs slot B |
+| p6 | `data` | ext4 | rest | Persistent `/data` (grown on first boot) |
 
 ## Images
 
@@ -73,15 +89,22 @@ IMAGE_FEATURES += "ssh-server-openssh"
 IMAGE_INSTALL:append = " \
     bluez5 \
     pi-ble-status \
-    eth0-networkd-config \
+    eth0-networkd-config wlan0-config \
     ssh-keys \
     e2fsprogs e2fsprogs-mke2fs e2fsprogs-e2fsck e2fsprogs-resize2fs \
-    resize-rootfs \
     bmaptool \
     util-linux util-linux-lsblk util-linux-blkid \
     parted curl nano \
+    rauc rauc-tryboot-backend rauc-mark-good \
+    data-mount resize-data \
+    resize-rootfs \
 "
 ```
+
+`rauc` + `rauc-tryboot-backend` provide the A/B OTA machinery (`bootloader=custom` handler);
+`data-mount` mounts `/data` (p6) and `resize-data` grows it on first boot. `resize-rootfs` is a
+**legacy** first-boot resize from the pre-A/B single-rootfs layout — now superseded by `resize-data`
+and a candidate for removal (it runs once and exits cleanly, so it is harmless).
 
 ## `meta-john` Recipe Details
 
@@ -129,34 +152,43 @@ Appends a static IP stanza to `/etc/network/interfaces`. Works because `core-ima
 ### `packagegroup-base.bbappend`
 Removes `ofono` and `neard` from the image. These are pulled in as hard `RDEPENDS` via `packagegroup-base-3g` and `packagegroup-base-nfc` respectively — `BAD_RECOMMENDATIONS` has no effect. The bbappend removes them from the packagegroup's `RDEPENDS` directly.
 
-### `resize-rootfs`
-systemd oneshot service that runs `resize2fs /dev/nvme0n1p2` on first boot after `parted` expands the partition to fill the disk. Runs once and self-disables via a stamp file (`/var/lib/resize-rootfs-done`). Required because `wic` images are fixed-size; the 116 GB NVMe would otherwise show the image's ~2 GB root.
+### `resize-data`
+systemd oneshot service that grows the last partition (`/data`, `nvme0n1p6`) to fill the disk on
+first boot, then expands the filesystem. Self-disables via a stamp file (`/var/lib/resize-data-done`).
+Because the wic is `dd`'d onto a much larger disk, the GPT **backup** header sits at the old image
+end, so `parted` is first fed `Fix` to relocate it before `resizepart`. A/B-safe: `/data` is shared
+across both rootfs slots but the stamp is per-slot, so the script also skips (via sysfs geometry)
+when the partition already fills the disk — otherwise the second slot's first boot would re-run the
+resize and fail. (The rootfs slots themselves are fixed-size; only `/data` grows.)
 
 ## NVMe Boot Configuration
 
-EEPROM `BOOT_ORDER=0xf16`:
+EEPROM `BOOT_ORDER=0xf61` (read right-to-left):
 
 | Nibble (RTL) | Device |
 |---|---|
-| `6` | NVMe (PCIe) — tried first |
-| `1` | SD card — fallback if NVMe fails |
+| `1` | SD card — tried first |
+| `6` | NVMe (PCIe) — used when no SD is present |
 | `f` | Restart loop |
 
-SD card stays permanently inserted as a silent recovery fallback. With a healthy NVMe boot partition, the SD is never selected.
+**SD-first**, deliberately: the microSD always wins when inserted, giving a guaranteed recovery and
+reflash path (flashing is always done from SD, never against the running NVMe root). Remove the SD to
+run the NVMe system. Everyday resilience is the RAUC A/B rootfs slots on the NVMe — a bad update boots
+the other slot, no SD involved.
 
 ## EEPROM Update Procedure (RPi5 / BCM2712)
 
 Pre-built binaries are in `~/repos/yocto-rpi5/rpi-eeprom/`:
-- `pieeprom-nvme-first.bin` / `.sig` — `BOOT_ORDER=0xf16` (NVMe first)
-- `pieeprom-sd-first.bin` / `.sig` — SD first
+- `pieeprom-sd-first.bin` / `.sig` — `BOOT_ORDER=0xf61` (SD first) ← current
+- `pieeprom-nvme-first.bin` / `.sig` — `BOOT_ORDER=0xf16` (NVMe first, legacy)
 
 **RPi5 requires three files on mmcblk0p1 — `recovery.bin` is mandatory:**
 
 ```bash
 # From a running Pi (SD or NVMe boot), mount the SD boot partition:
 mount /dev/mmcblk0p1 /mnt
-cp ~/repos/yocto-rpi5/rpi-eeprom/pieeprom-nvme-first.bin /mnt/pieeprom.upd
-cp ~/repos/yocto-rpi5/rpi-eeprom/pieeprom-nvme-first.sig /mnt/pieeprom.sig
+cp ~/repos/yocto-rpi5/rpi-eeprom/pieeprom-sd-first.bin /mnt/pieeprom.upd
+cp ~/repos/yocto-rpi5/rpi-eeprom/pieeprom-sd-first.sig /mnt/pieeprom.sig
 cp ~/repos/yocto-rpi5/rpi-eeprom/firmware-2712/default/recovery.bin /mnt/recovery.bin
 sync && umount /mnt && reboot
 ```
@@ -185,10 +217,8 @@ bitbake rpi5-base-image
 bzcat build-rpi5/tmp/deploy/images/raspberrypi5/core-image-minimal-raspberrypi5.rootfs.wic.bz2 \
     | sudo dd of=/dev/sdX bs=4M
 
-# Insert SD. BOOT_ORDER=0xf16 boots NVMe first, so zero the boot sector to force SD fallback:
-ssh root@169.254.100.1 'dd if=/dev/zero of=/dev/nvme0n1p1 bs=512 count=1 && reboot'
-
-# Wait for SD boot (Dropbear RSA — StrictHostKeyChecking=no required)
+# Insert SD and power on. SD-first EEPROM (0xf61) boots the SD recovery image directly —
+# no need to disable NVMe boot.
 ssh-keygen -R 169.254.100.1
 until ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no root@169.254.100.1 'echo up'; do sleep 5; done
 
@@ -196,14 +226,12 @@ until ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no root@169.254.100.1 'ec
 ssh -o StrictHostKeyChecking=no root@169.254.100.1 'cat /proc/cmdline | grep -o "root=[^ ]*"'
 # expect: root=/dev/mmcblk0p2
 
-# Pipe NVMe image from laptop directly to Pi
+# Pipe NVMe image from laptop directly to Pi (BusyBox dd — no status=progress)
 bzcat build-rpi5/tmp/deploy/images/raspberrypi5/rpi5-base-image-raspberrypi5.rootfs.wic.bz2 \
     | ssh -o StrictHostKeyChecking=no root@169.254.100.1 'dd of=/dev/nvme0n1 bs=4M && sync'
 
-# Reboot (separate command — 'reboot' inside the pipe returns Access denied on SD image)
-ssh -o StrictHostKeyChecking=no root@169.254.100.1 'reboot'
-
-# Pi boots from NVMe (SD stays in as silent fallback)
+# Power off, REMOVE the SD card, power on — firmware boots the NVMe (slot A).
+# (Leaving the SD in would just boot the recovery image again — SD-first.)
 ssh-keygen -R 169.254.100.1 && ssh root@169.254.100.1
 
 # Re-provision WiFi via BLE: write "SSID/password" to characteristic 1006
@@ -212,29 +240,50 @@ ssh-keygen -R 169.254.100.1 && ssh root@169.254.100.1
 
 Never write to `nvme0n1` while it is the running root — ext4 corruption, read-only remounts, sshd unable to generate host keys.
 
-## NVMe-Specific Wic Fixes
+## Tryboot Wic Post-Processing (`setup_tryboot_image`)
 
-Yocto's wic `direct.py` imager only adds the `p` partition separator for `mmcblk` devices:
+`wic` populates the slot-A boot partition (p2) via `bootimg-partition`, but it knows nothing about the
+tryboot selector (p1), the per-slot cmdline files, the `config.txt [boot_partition=N]` conditional, or
+the slot-B boot partition (p3). An `IMAGE_POSTPROCESS_COMMAND` in `rpi5-base-image.bb` injects all of
+that into the compressed wic after creation, computing FAT offsets from the GPT (`sfdisk -J`) rather
+than hardcoding them:
 
-```python
-prefix = 'p' if part.disk.startswith('mmcblk') else ''
-```
+1. Decompress with `pbzip2`.
+2. **p1 (selector):** write `autoboot.txt` — `[all] boot_partition=2`, `[tryboot] boot_partition=3`
+   (slot A is the committed default at flash time).
+3. **p2 (boot-A):** write `cmdline-rootfs-A.txt` (`root=/dev/nvme0n1p4 rauc.slot=A`) and
+   `cmdline-rootfs-B.txt` (`root=…p5 rauc.slot=B`) via `mcopy`.
+4. **p2:** prepend the firmware `[boot_partition=N]` selector to `config.txt` so the *same* boot image
+   picks the matching rootfs in whichever slot it runs from.
+5. **Clone p2 → p3 (boot-B):** byte-range `dd` of the now fully-populated boot-A onto boot-B, so slot B
+   is bootable straight from a flash (a rootfs-only RAUC bundle never writes boot files). `config.txt`
+   is identical in both slots, so the copy is correct as-is. The `dd` uses
+   `skip_bytes`/`seek_bytes`/`count_bytes` with raw byte offsets — **bitbake's pysh shell parser
+   rejects `$((...))` arithmetic.**
+6. Recompress with `pbzip2`.
 
-With `--ondisk nvme0n1`, wic generates `/dev/nvme0n11` (wrong) instead of `/dev/nvme0n1p1` in fstab, and `root=/dev/mmcblk0p2` in `cmdline.txt`. Both are patched inside the wic image at build time via `IMAGE_POSTPROCESS_COMMAND` in `rpi5-base-image.bb`:
+`/etc/fstab` is handled separately by `fixup_fstab` in `ROOTFS_POSTPROCESS_COMMAND` (baked into the
+rootfs so the standalone `.ext4` used for OTA is correct too). It is intentionally **slot-agnostic with
+no `/boot` entry** — RAUC installs the same rootfs to either slot, so it must not hardcode a boot
+device; the boot partitions are written via their block device and the tryboot backend mounts the
+selector (p1) on demand. This also sidesteps the old `wic`/`direct.py` `nvme0n11` quirk (it only adds
+the `p` separator for `mmcblk` devices), since no `/boot` fstab entry is generated and `root=` is set
+explicitly per slot.
 
-1. Decompress with `pbzip2`
-2. Patch `cmdline.txt` using `mcopy` (mtools FAT access via `@@offset` at byte 4,194,304 = sector 8192 × 512, from `--align 4096` in the wks)
-3. Append `reboot=cold` to `cmdline.txt`
-4. Patch `/etc/fstab` using `debugfs` (`rm` then `write` — `write` fails on existing files)
-5. Recompress with `pbzip2`
+Use `${IMAGE_LINK_NAME}` (not `${IMAGE_NAME}`) for the wic path — `IMAGE_NAME` includes `DATETIME` and
+won't match sstate-served files.
 
-Use `${IMAGE_LINK_NAME}` (not `${IMAGE_NAME}`) for the wic path — `IMAGE_NAME` includes `DATETIME` and won't match sstate-served files.
+## Reboot Mode: `reboot=cold` (historical note)
 
-## Reboot Mode: `reboot=cold`
+The RPi5 firmware injects `reboot=w` (warm reboot), which does not fully reset PCIe. In the old
+NVMe-first layout, a warm reboot right after a large `dd` to NVMe could leave the controller busy and
+make the bootloader fall back to SD, so `patch_nvme_image` appended `reboot=cold` to `cmdline.txt`
+(last-value-wins overrides `reboot=w`).
 
-The RPi5 firmware injects `reboot=w` (warm reboot) at the start of the kernel command line. On a warm reboot, PCIe is not fully reset. After a large `dd` write to NVMe, the controller has pending internal operations; a warm reboot leaves it in a busy state and the bootloader falls back to SD.
-
-`reboot=cold` is appended to `cmdline.txt` in `IMAGE_POSTPROCESS_COMMAND`. Kernel parameters are last-value-wins, so `reboot=cold` overrides the firmware-injected `reboot=w`, ensuring a full PCIe reset on every reboot.
+The current tryboot `cmdline-rootfs-{A,B}.txt` do **not** set `reboot=cold`, and it has not been
+needed: A↔B OTA swaps and rollbacks reboot reliably warm, and the only large NVMe `dd` (the initial
+flash) is followed by a physical power-cycle anyway (SD removal). If a warm-reboot PCIe issue ever
+resurfaces, re-add `reboot=cold` to both cmdline files in `setup_tryboot_image`.
 
 ## Package Name Surprises
 
@@ -254,3 +303,5 @@ The RPi5 firmware injects `reboot=w` (warm reboot) at the start of the kernel co
 - **Root home directory is `/home/root`, not `/root`** — Yocto's default `/etc/passwd` sets root's home to `/home/root`. The `ssh-keys` recipe must install `authorized_keys` to `${D}/home/root/.ssh/`, not `${D}/root/.ssh/`. sshd resolves `AuthorizedKeysFile .ssh/authorized_keys` relative to the user's home — wrong path = silent key auth failure even when `PermitRootLogin prohibit-password` is correctly set
 - **`PermitRootLogin` must be explicitly set** — without `debug-tweaks`, the compiled-in OpenSSH default blocks root login. Set `PermitRootLogin prohibit-password` via `ROOTFS_POSTPROCESS_COMMAND` in the image recipe
 - **WiFi regulatory domain** — wpa_supplicant requires `country=DK` in `wpa_supplicant-wlan0.conf` or the AP rejects association at the driver level (status_code=16, BSSID all-zeros). The BLE provisioning script now writes `country=DK` automatically
+- **RAUC bundle is rootfs-only** (`RAUC_BUNDLE_SLOTS = "rootfs"`) — an OTA updates only the inactive rootfs slot; the boot partitions (kernel/dtb/config.txt) change only on a full wic flash. Fine for userspace/rootfs updates; a kernel OTA would need a boot+rootfs bundle
+- **`bootloader=custom`, `mark-active other` required** — `rauc install` writes the inactive slot but does **not** auto-activate in this config. The explicit `rauc status mark-active other` calls the tryboot backend that rewrites `autoboot.txt`. Automatic rollback-on-failure (firmware one-shot `tryboot` via `vcmailbox`) is not wired in — `raspberrypi-utils` is not installed

@@ -130,12 +130,19 @@ WiFi (`wlan0`) uses DHCP via systemd-networkd. Credentials are provisioned at ru
 
 ## NVMe Boot
 
-The Pi's EEPROM boot order is set to `0xf16`:
-- `6` (rightmost) = NVMe — tried first
-- `1` = SD card — fallback if NVMe fails
+The Pi's EEPROM boot order is set to `0xf61` (read right-to-left):
+- `1` (rightmost) = SD card — tried first
+- `6` = NVMe — used when no SD is present
 - `f` = restart loop
 
-This is set using pre-built EEPROM binaries in the `rpi-eeprom/` directory. The SD card stays inserted as a silent fallback — it does not interfere with normal NVMe boots.
+This is set using pre-built EEPROM binaries in the `rpi-eeprom/` directory. **SD-first** means the
+microSD always wins when inserted, so it is a deliberate recovery/reflash tool — pop it in to get a
+guaranteed recovery image, remove it to run the NVMe system. Your everyday resilience is the RAUC
+**A/B** rootfs slots on the NVMe itself: a bad update boots the other slot, no SD needed.
+
+There is no U-Boot (it has no PCIe driver for the Pi 5's BCM2712, so it cannot boot NVMe). The Pi
+firmware loads the kernel directly, and A/B slot selection uses the firmware's native `tryboot`
+mechanism via `autoboot.txt`.
 
 ## Flash Procedure (Summary)
 
@@ -148,9 +155,10 @@ until ssh -o StrictHostKeyChecking=no root@169.254.100.1 'echo up'; do sleep 5; 
 
 # Pipe NVMe image directly from laptop to Pi
 bzcat rpi5-base-image-raspberrypi5.rootfs.wic.bz2 \
-    | ssh -o StrictHostKeyChecking=no root@169.254.100.1 'dd of=/dev/nvme0n1 bs=4M && sync && reboot'
+    | ssh -o StrictHostKeyChecking=no root@169.254.100.1 'dd of=/dev/nvme0n1 bs=4M && sync'
 
-# Pi reboots — comes up from NVMe automatically (SD stays in as fallback)
+# Power off, REMOVE the SD card, power on — firmware boots the NVMe (slot A).
+# (SD-first EEPROM: leaving the SD in would just boot the recovery image again.)
 ssh-keygen -R 169.254.100.1 && ssh root@169.254.100.1
 ```
 
