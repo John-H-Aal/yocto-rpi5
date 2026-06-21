@@ -191,8 +191,22 @@ flash/recovery path; the NVMe boots only when the SD is absent.
 **First-boot `/data` resize** — wic images are fixed size; `resize-data` relocates the
 GPT backup header (needed after `dd` onto a larger disk) then grows `/data` to fill.
 
-**BLE diagnostics + WiFi provisioning** — `pi-ble-status` exposes IP/temp/uptime/host
-over BLE and accepts WiFi credentials at runtime (no reflash).
+**WiFi provisioning over BLE — credential-free image** — WiFi credentials are **never** baked
+into the image or stored in the repo. The `pi-ble-status` BLE GATT server (service `00001000-…`)
+provisions WiFi at runtime: write `SSID`/`password` to characteristic `…1006`, and the Pi writes
+`wpa_supplicant-wlan0.conf` and brings up `wlan0`. The loop is self-contained over BLE — you don't
+need to know the DHCP address in advance:
+
+| Characteristic | Access | Value |
+|---|---|---|
+| `…1006` | write / read | write `SSID`/`password` to provision; read provisioning status |
+| `…1001` | read | `wlan0` IP (the DHCP-assigned WiFi address — read it back here after provisioning) |
+| `…1002` | read | `eth0` IP |
+| `…1003` / `…1004` / `…1005` | read | CPU temperature / uptime / hostname |
+
+Because the credentials live only in the running slot's rootfs, they do **not** survive a reflash or
+a RAUC A/B OTA — re-provision over BLE on the new slot (this is by design, not a gap). Useful when
+SSH is unreachable or the WiFi IP has changed.
 
 ---
 

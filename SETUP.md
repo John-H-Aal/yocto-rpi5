@@ -154,6 +154,27 @@ meta-john/
 
 Both result in `eth0` at `169.254.100.1/16` on boot.
 
+### WiFi provisioning over BLE (credential-free image)
+
+WiFi credentials are **never** baked into the image or committed to the repo. WiFi is provisioned at
+runtime over BLE via `pi-ble-status` (BlueZ GATT server, BT MAC `D8:3A:DD:E6:3E:9C`, service UUID
+`00001000-0000-0000-0000-000000000000`). The whole loop is self-contained over BLE — you do not need
+to know the DHCP address in advance:
+
+| Characteristic | Access | Value |
+|---|---|---|
+| `…1006` | write / read | write `SSID`/`password` to provision (writes `wpa_supplicant-wlan0.conf`, brings up `wlan0`); read provisioning status |
+| `…1001` | read | `wlan0` IP — **read the assigned WiFi IP back here after provisioning** |
+| `…1002` | read | `eth0` IP |
+| `…1003` / `…1004` / `…1005` | read | CPU temperature / uptime / hostname |
+
+**Flow:** connect to the GATT server → write `SSID`/`password` to `…1006` → read `wlan0` IP from
+`…1001` → SSH to that IP with your key. No credentials in the image, no DHCP address to guess.
+
+Credentials live only in the **running slot's rootfs**, so they do **not** survive a reflash or a
+RAUC A/B OTA (each slot, and each fresh flash, starts credential-free) — re-provision over BLE on the
+new slot. This is intentional; do not bake WiFi credentials into the image to "fix" it.
+
 ### `packagegroup-base.bbappend` — removing unwanted services
 
 ```bitbake
