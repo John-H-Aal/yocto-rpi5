@@ -36,6 +36,12 @@ services:
       # available inside Docker at the path the bundle recipe expects.
       - ./meta-john/files/rauc-keys:/home/yocto/rauc-keys:ro
 
+    # Disable SELinux label enforcement for this container so bind-mounted
+    # host files (user_home_t context) are accessible. Safe for a local dev
+    # build environment; avoids mass-relabeling thousands of layer files.
+    security_opt:
+      - label=disable
+
     stdin_open: true
     tty: true
 
