@@ -1,0 +1,27 @@
+# bblayers.conf for Docker builds (paths are /home/yocto/... inside the container)
+#
+# Usage:
+#   cp build-rpi5/conf/bblayers-docker.conf.example build-rpi5/conf/bblayers.conf
+#   docker compose run yocto-builder
+#
+# Restore native config afterwards:
+#   git checkout build-rpi5/conf/bblayers.conf
+
+POKY_BBLAYERS_CONF_VERSION = "2"
+
+BBPATH = "${TOPDIR}"
+BBFILES ?= ""
+
+BBLAYERS ?= " \
+  /home/yocto/poky/meta \
+  /home/yocto/poky/meta-poky \
+  /home/yocto/poky/meta-yocto-bsp \
+  /home/yocto/meta-openembedded/meta-oe \
+  /home/yocto/meta-openembedded/meta-python \
+  /home/yocto/meta-openembedded/meta-networking \
+  /home/yocto/meta-lts-mixins \
+  /home/yocto/meta-raspberrypi \
+  /home/yocto/meta-rauc \
+  /home/yocto/meta-rauc-community/meta-rauc-raspberrypi \
+  /home/yocto/meta-john \
+  "

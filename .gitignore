@@ -2,6 +2,9 @@
 poky/
 meta-openembedded/
 meta-raspberrypi/
+meta-lts-mixins/
+meta-rauc/
+meta-rauc-community/
 rpi-eeprom/
 
 # Build artifacts
@@ -11,3 +14,7 @@ build-rpi5/bitbake-cookerdaemon.log
 build-rpi5/.vscode/
 downloads/
 sstate-cache/
+
+# Docker build output (bind-mounted into container)
+output/*
+!output/.gitkeep

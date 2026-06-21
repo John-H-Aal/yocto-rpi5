@@ -375,3 +375,170 @@ bitbake rpi5-base-image
 | Poky WARNING in MOTD | Remove `/etc/motd` in `rpi5-base-image.bb` if desired |
 | Changing `DISTRO_FEATURES` requires full cleansstate | Run `bitbake -c cleansstate rpi5-base-image && bitbake rpi5-base-image` — sstate serves stale packages built without systemd support, causing silent failures (e.g. NM not configuring eth0) |
 | BLE available on Pi | `pi-ble-status` broadcasts IP (wlan0/eth0), CPU temp, uptime, hostname — useful diagnostic when SSH is unreachable. Pi BT MAC: D8:3A:DD:E6:3E:9C |
+
+---
+
+## 11. RAUC A/B OTA — feature/rauc-uboot branch
+
+> **Branch:** `feature/rauc-uboot`  
+> **Reference:** [Qbee RAUC tutorial for RPi5](https://docs.qbee.io/tutorial-rpi5-rauc.html) (Qbee-agent steps omitted)  
+> **Build environment:** Docker (Ubuntu 22.04) is the primary path — Fedora 44 is unsupported by Scarthgap.
+
+### 11.1 Layer setup (clone on host before Docker)
+
+Clone all external layers into `~/repos/yocto-rpi5/`. The moto-timo forks and `meta-lts-mixins` replace the upstream `meta-raspberrypi` and provide U-Boot support for RPi5 on Scarthgap.
+
+```bash
+cd ~/repos/yocto-rpi5
+
+# meta-lts-mixins — U-Boot version override; MUST come before meta-raspberrypi
+# in bblayers.conf or the build fails with a recipe version conflict.
+git clone --branch scarthgap/u-boot \
+    https://github.com/moto-timo/meta-lts-mixins.git
+
+# moto-timo fork of meta-raspberrypi — adds RPi5 U-Boot support
+# Replaces the upstream meta-raspberrypi you cloned in step 2.
+# Safest: re-clone rather than re-pointing the existing remote.
+git clone --branch scarthgap/raspberrypi5_u-boot \
+    https://github.com/moto-timo/meta-raspberrypi.git meta-raspberrypi-uboot
+# Then either rename directories or update bblayers.conf to point to meta-raspberrypi-uboot.
+# Recommended: back up existing and swap:
+#   mv meta-raspberrypi meta-raspberrypi-upstream-bkp
+#   mv meta-raspberrypi-uboot meta-raspberrypi
+
+# Official RAUC layer (Scarthgap branch)
+git clone --branch scarthgap \
+    https://github.com/rauc/meta-rauc.git
+
+# moto-timo fork of meta-rauc-community — adds RPi5 RAUC+U-Boot integration
+git clone --branch scarthgap/raspberrypi5_u-boot \
+    https://github.com/moto-timo/meta-rauc-community.git
+```
+
+> **TODO / fork stability note:** The moto-timo branches (`scarthgap/raspberrypi5_u-boot`, `scarthgap/u-boot`) are development forks, not official releases. Pin to a specific commit SHA for reproducible builds.
+
+### 11.2 Docker quickstart
+
+```bash
+cd ~/repos/yocto-rpi5
+
+# Step 1 — Switch bblayers.conf to Docker paths (restore with git checkout afterwards)
+cp build-rpi5/conf/bblayers-docker.conf.example build-rpi5/conf/bblayers.conf
+
+# Step 2 — Enter the build container (sources oe-init-build-env automatically)
+docker compose run yocto-builder
+
+# Inside the container:
+umask 022
+bitbake rpi5-base-image      # builds rootfs + wic + ext4
+bitbake rauc-bundle          # assembles signed .raucb update bundle
+```
+
+Built artifacts land in `build-rpi5/tmp/deploy/images/raspberrypi5/`.  
+Copy the bundle to `./output/` for serving:
+
+```bash
+cp build-rpi5/tmp/deploy/images/raspberrypi5/rpi5-rauc-bundle.raucb output/
+```
+
+> **sstate note:** The existing native `sstate-cache/` is NOT reusable inside Docker (different host toolchains = different hashes). Expect a full rebuild on first Docker run. Subsequent Docker runs reuse the `yocto-sstate` named volume.
+
+> **Native Fedora 44 build (unsupported):** Scarthgap does not officially support Fedora 44 as a host. The original native build instructions in sections 1–9 still apply for the non-RAUC main branch, but for the `feature/rauc-uboot` branch use Docker.
+
+### 11.3 RAUC signing keys (generate once)
+
+```bash
+cd ~/repos/yocto-rpi5
+
+# create-example-keys.sh is in the meta-rauc-community repo
+# It generates a self-signed CA and a development signing keypair.
+bash meta-rauc-community/scripts/create-example-keys.sh
+
+# Copy output to meta-john/files/rauc-keys/ (gitignored — never commit .pem files)
+cp *.pem meta-john/files/rauc-keys/
+# Expected files:
+#   ca.cert.pem           — installed to /etc/rauc/ca.cert.pem on the Pi
+#   development-1.cert.pem — used by rauc-bundle.bb for bundle signing
+#   development-1.key.pem  — private key, keep off the Pi
+ls meta-john/files/rauc-keys/
+```
+
+Keys must exist before running `bitbake rauc-bundle`.
+
+### 11.4 Partition layout
+
+| Partition | Device | Size | Label | Purpose |
+|---|---|---|---|---|
+| p1 | `/dev/mmcblk0p1` | 256 MB | `boot` | U-Boot + kernel + dtb |
+| p2 | `/dev/mmcblk0p2` | 4 GB fixed | `rootfs-a` | RAUC slot A (active after flash) |
+| p3 | `/dev/mmcblk0p3` | 4 GB fixed | `rootfs-b` | RAUC slot B (cloned from A; OTA target) |
+| p4 | `/dev/mmcblk0p4` | remainder | `data` | Persistent `/data`, survives OTA |
+
+WKS file: `meta-john/wic/rauc-raspberrypi.wks`  
+Alternative: `sdimage-dual-raspberrypi.wks.in` from `meta-rauc-community/meta-rauc-raspberrypi/` (no `/data` partition).
+
+### 11.5 Initial SD flash and slot clone
+
+```bash
+# Flash the full wic image to SD (replaces entire card including partition table)
+sudo umount -l /dev/sda1 /dev/sda2 /dev/sda3 /dev/sda4 2>/dev/null
+sudo systemctl stop udisks2
+bzcat build-rpi5/tmp/deploy/images/raspberrypi5/rpi5-base-image-raspberrypi5.rootfs.wic.bz2 \
+    | sudo dd of=/dev/sda bs=4M status=progress
+sudo systemctl start udisks2
+sudo eject /dev/sda
+
+# Boot the Pi from SD, SSH in
+ssh root@169.254.100.1
+
+# Clone slot A → slot B (so B is also bootable from the start)
+dd if=/dev/mmcblk0p2 of=/dev/mmcblk0p3 bs=4M status=progress && sync
+# Format /data partition (only needed on first flash)
+mkfs.ext4 -L data /dev/mmcblk0p4
+reboot
+```
+
+After reboot, `rauc status` should show slot A as `good` and slot B as `good`.
+
+### 11.6 OTA test procedure
+
+```bash
+# On Fedora laptop — serve output/ directory (plain HTTP is safe: bundles are signed)
+python3 -m http.server 8080 --directory output/
+
+# On the Pi — download and install the bundle
+curl http://<laptop-eth0-ip>:8080/rpi5-rauc-bundle.raucb -o /tmp/update.raucb
+rauc install /tmp/update.raucb
+reboot
+
+# After reboot — verify slot switched and mark is applied
+rauc status
+# Expect: booted slot = B, status = good
+```
+
+### 11.7 Rollback test
+
+```bash
+# On the Pi — corrupt slot B boot metadata to force rollback
+dd if=/dev/zero of=/dev/mmcblk0p2 bs=512 count=1   # zero slot A's superblock
+# (U-Boot will exhaust BOOT_A_LEFT=3 attempts on A, then fall back to B)
+reboot
+
+# After reboot — confirm we're on slot B
+cat /proc/cmdline | grep -o "root=[^ ]*"   # expect root=/dev/mmcblk0p3
+rauc status
+```
+
+### 11.8 U-Boot environment variables
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `BOOT_ORDER` | `A B` | Try slot A first, then B |
+| `BOOT_A_LEFT` | `3` | Remaining boot attempts for slot A |
+| `BOOT_B_LEFT` | `3` | Remaining boot attempts for slot B |
+
+RAUC updates these via `fw_setenv` (from `u-boot-fw-utils`) using `/etc/fw_env.config` which points to the raw U-Boot environment partition offset.
+
+> **TODO:** Verify `/etc/fw_env.config` offsets against the moto-timo U-Boot defconfig (`CONFIG_ENV_OFFSET`). If the fork uses `CONFIG_ENV_IS_IN_FAT`, update `fw_env.config` to use the FAT-file form instead of raw offsets. See `meta-john/recipes-core/rauc/files/fw_env.config`.
+
+> **TODO:** Verify `boot.cmd.in` kernel image name and load addresses against the moto-timo fork output. The fork may already provide a `boot.scr`; if so, remove or adjust `meta-john/recipes-bsp/u-boot/u-boot_%.bbappend` to avoid conflicts.

@@ -1,0 +1,42 @@
+services:
+  yocto-builder:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      # Named volume — Docker sstate is separate from native sstate (different host tools =
+      # different hashes; native sstate-cache/ is NOT reusable inside Docker).
+      - yocto-sstate:/home/yocto/sstate-cache
+
+      # ── Host-layer bind mounts (read-only) ─────────────────────────────────
+      # Clone these on the host before first run — see SETUP.md § Layer Setup.
+      - ./poky:/home/yocto/poky:ro
+      - ./meta-openembedded:/home/yocto/meta-openembedded:ro
+      # moto-timo/meta-lts-mixins (branch scarthgap/u-boot) — provides the U-Boot
+      # version override required for RPi5 Scarthgap; must come before meta-raspberrypi
+      - ./meta-lts-mixins:/home/yocto/meta-lts-mixins:ro
+      # moto-timo fork of meta-raspberrypi (branch scarthgap/raspberrypi5_u-boot)
+      - ./meta-raspberrypi:/home/yocto/meta-raspberrypi:ro
+      # official RAUC layer
+      - ./meta-rauc:/home/yocto/meta-rauc:ro
+      # moto-timo fork of meta-rauc-community (branch scarthgap/raspberrypi5_u-boot)
+      - ./meta-rauc-community:/home/yocto/meta-rauc-community:ro
+
+      # ── Live-edit + output ──────────────────────────────────────────────────
+      - ./meta-john:/home/yocto/meta-john
+      # bblayers.conf must use /home/yocto/… paths inside Docker;
+      # copy build-rpi5/conf/bblayers-docker.conf.example → bblayers.conf first.
+      - ./build-rpi5/conf:/home/yocto/build-rpi5/conf
+      # Reuse host downloads cache (safe to share between native and Docker)
+      - ./downloads:/home/yocto/downloads
+      # Built images land here
+      - ./output:/home/yocto/output
+      # RAUC signing keys — generate once on host, then this mount makes them
+      # available inside Docker at the path the bundle recipe expects.
+      - ./meta-john/files/rauc-keys:/home/yocto/rauc-keys:ro
+
+    stdin_open: true
+    tty: true
+
+volumes:
+  yocto-sstate:
