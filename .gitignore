@@ -5,12 +5,12 @@ meta-raspberrypi/
 meta-lts-mixins/
 meta-rauc/
 meta-rauc-community/
+meta-raspberrypi-upstream-bkp/
 rpi-eeprom/
 
-# Build artifacts
-build-rpi5/tmp/
-build-rpi5/cache/
-build-rpi5/bitbake-cookerdaemon.log
+# Build artifacts — ignore everything in build-rpi5/ except conf/
+build-rpi5/*
+!build-rpi5/conf/
 build-rpi5/.vscode/
 downloads/
 sstate-cache/
