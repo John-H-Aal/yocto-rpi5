@@ -5,9 +5,10 @@ services:
       dockerfile: Dockerfile
       network: host
     volumes:
-      # Named volume — Docker sstate is separate from native sstate (different host tools =
-      # different hashes; native sstate-cache/ is NOT reusable inside Docker).
-      - yocto-sstate:/home/yocto/sstate-cache
+      # Docker sstate — separate from native sstate-cache/ (different host tools =
+      # different hashes). Host bind-mount so yocto user (uid 1000) owns it from
+      # the start; named volumes are created root-owned and block writes.
+      - ./sstate-cache-docker:/home/yocto/sstate-cache
 
       # ── Host-layer bind mounts (read-only) ─────────────────────────────────
       # Clone these on the host before first run — see SETUP.md § Layer Setup.

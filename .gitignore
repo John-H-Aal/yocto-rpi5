@@ -14,6 +14,7 @@ build-rpi5/bitbake-cookerdaemon.log
 build-rpi5/.vscode/
 downloads/
 sstate-cache/
+sstate-cache-docker/
 
 # Docker build output (bind-mounted into container)
 output/*
