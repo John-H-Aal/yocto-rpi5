@@ -121,12 +121,8 @@ meta-john/
 │   │   ├── init-ifupdown_%.bbappend            — static IP for core-image-minimal
 │   │   └── files/
 │   │       └── interfaces
-│   ├── packagegroups/
-│   │   └── packagegroup-base.bbappend          — removes ofono/neard from base
-│   └── resize-rootfs/                          — LEGACY (pre-A/B); superseded by resize-data
-│       ├── resize-rootfs_1.0.bb
-│       └── files/
-│           └── resize-rootfs                   — init script
+│   └── packagegroups/
+│       └── packagegroup-base.bbappend          — removes ofono/neard from base
 ├── recipes-bsp/
 │   └── u-boot/                                 — autoboot_no_delay.cfg only (parse-time dep; U-Boot unused)
 ```
@@ -146,7 +142,6 @@ meta-john/
 | `parted` | Partition management |
 | `rauc` + `rauc-tryboot-backend` + `rauc-mark-good` | A/B OTA: `bootloader=custom` + `autoboot.txt` handler |
 | `data-mount` + `resize-data` | Mount `/data` (p6) and grow it on first boot (A/B-safe) |
-| `resize-rootfs` | **Legacy** pre-A/B root resize — superseded by `resize-data`, harmless |
 | `curl` | Network transfers |
 | `nano` | Basic editor |
 
@@ -177,8 +172,8 @@ Removes `ofono` (mobile telephony), `neard` (NFC) — no relevant hardware.
 3. `parted resizepart 6 100%`, `partx -u` (BLKPG online update — root is on the same disk), `e2fsck`,
    then `resize2fs`.
 
-> The old `resize-rootfs` init script (root-partition resize, pre-A/B) is still installed but
-> superseded; it runs once and exits cleanly. A candidate for removal.
+> The old `resize-rootfs` init script (root-partition resize, pre-A/B) has been removed — it was a
+> no-op on the A/B layout (rootfs slots are fixed-size; only `/data` grows).
 
 ---
 

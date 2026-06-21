@@ -53,7 +53,8 @@ This is the custom layer. It contains:
 | `pi-ble-status/` | BLE GATT server: reads IP/temp/uptime/hostname; writable char 1006 provisions WiFi |
 | `init-ifupdown/` bbappend | Configures static IP for `core-image-minimal` (no NetworkManager) |
 | `packagegroup-base.bbappend` | Removes `ofono` and `neard` (unwanted modem/NFC daemons) |
-| `resize-rootfs/` | First-boot script that expands the root partition to fill the drive |
+| `rauc/` + `rauc-tryboot-backend/` | RAUC A/B OTA: `bootloader=custom` + the `autoboot.txt` handler |
+| `data-mount/` + `resize-data/` | Mounts `/data` (p6) and grows it to fill the drive on first boot |
 
 ## Two Images
 
@@ -70,7 +71,7 @@ The permanent image, built by `meta-john`. Runs from NVMe. Includes:
 - `e2fsprogs` for filesystem tools
 - `bmaptool` for flashing
 - `pi-ble-status` — BLE diagnostic server
-- The auto-resize-rootfs service
+- RAUC A/B OTA (`rauc` + tryboot backend) and the `resize-data` first-boot `/data` resize
 
 ## Key `local.conf` Settings
 

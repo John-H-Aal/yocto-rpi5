@@ -97,14 +97,13 @@ IMAGE_INSTALL:append = " \
     parted curl nano \
     rauc rauc-tryboot-backend rauc-mark-good \
     data-mount resize-data \
-    resize-rootfs \
 "
 ```
 
 `rauc` + `rauc-tryboot-backend` provide the A/B OTA machinery (`bootloader=custom` handler);
-`data-mount` mounts `/data` (p6) and `resize-data` grows it on first boot. `resize-rootfs` is a
-**legacy** first-boot resize from the pre-A/B single-rootfs layout — now superseded by `resize-data`
-and a candidate for removal (it runs once and exits cleanly, so it is harmless).
+`data-mount` mounts `/data` (p6) and `resize-data` grows it on first boot. (The pre-A/B
+`resize-rootfs` recipe was removed — it was a no-op on the A/B layout, where rootfs slots are
+fixed-size and only `/data` grows.)
 
 ## `meta-john` Recipe Details
 
