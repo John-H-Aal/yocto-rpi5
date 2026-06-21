@@ -25,9 +25,10 @@ services:
 
       # ── Live-edit + output ──────────────────────────────────────────────────
       - ./meta-john:/home/yocto/meta-john
-      # bblayers.conf must use /home/yocto/… paths inside Docker;
-      # copy build-rpi5/conf/bblayers-docker.conf.example → bblayers.conf first.
-      - ./build-rpi5/conf:/home/yocto/build-rpi5/conf
+      # Mount the whole build dir — oe-init-build-env needs to write to the
+      # parent, not just conf/. tmp/ and cache/ are gitignored on the host.
+      # bblayers.conf must use /home/yocto/… paths — see bblayers-docker.conf.example
+      - ./build-rpi5:/home/yocto/build-rpi5
       # Reuse host downloads cache (safe to share between native and Docker)
       - ./downloads:/home/yocto/downloads
       # Built images land here
