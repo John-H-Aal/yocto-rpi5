@@ -16,7 +16,7 @@ services:
       # moto-timo/meta-lts-mixins (branch scarthgap/u-boot) — provides the U-Boot
       # version override required for RPi5 Scarthgap; must come before meta-raspberrypi
       - ./meta-lts-mixins:/home/yocto/meta-lts-mixins:ro
-      # moto-timo fork of meta-raspberrypi (branch scarthgap/raspberrypi5_u-boot)
+      # moto-timo fork of meta-raspberrypi (branch scarthgap)
       - ./meta-raspberrypi:/home/yocto/meta-raspberrypi:ro
       # official RAUC layer
       - ./meta-rauc:/home/yocto/meta-rauc:ro

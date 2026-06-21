@@ -396,15 +396,12 @@ cd ~/repos/yocto-rpi5
 git clone --branch scarthgap/u-boot \
     https://github.com/moto-timo/meta-lts-mixins.git
 
-# moto-timo fork of meta-raspberrypi — adds RPi5 U-Boot support
-# Replaces the upstream meta-raspberrypi you cloned in step 2.
-# Safest: re-clone rather than re-pointing the existing remote.
-git clone --branch scarthgap/raspberrypi5_u-boot \
-    https://github.com/moto-timo/meta-raspberrypi.git meta-raspberrypi-uboot
-# Then either rename directories or update bblayers.conf to point to meta-raspberrypi-uboot.
-# Recommended: back up existing and swap:
-#   mv meta-raspberrypi meta-raspberrypi-upstream-bkp
-#   mv meta-raspberrypi-uboot meta-raspberrypi
+# moto-timo fork of meta-raspberrypi — adds RPi5 U-Boot support (branch: scarthgap)
+# NOTE: the branch was named scarthgap/raspberrypi5_u-boot in the Qbee tutorial
+#       but has since been merged/renamed to scarthgap.
+mv meta-raspberrypi meta-raspberrypi-upstream-bkp
+git clone --branch scarthgap \
+    https://github.com/moto-timo/meta-raspberrypi.git
 
 # Official RAUC layer (Scarthgap branch)
 git clone --branch scarthgap \
