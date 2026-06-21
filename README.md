@@ -1,7 +1,14 @@
-# Yocto RPi5 — NVMe Boot
+# Yocto RPi5 — RAUC A/B OTA on NVMe
 
 Custom embedded Linux image for Raspberry Pi 5 built with Yocto Scarthgap (5.0 LTS).
-Headless, SSH-only, booting from NVMe via Argon ONE V3 PCIe enclosure.
+Headless, SSH-only, booting from NVMe via an Argon ONE V3 PCIe enclosure, with
+**RAUC A/B over-the-air updates** driven by the Raspberry Pi firmware's native
+`tryboot` mechanism — **no U-Boot**.
+
+> **Why no U-Boot?** U-Boot has no BCM2712 (Pi 5) PCIe driver yet, so it cannot read
+> an NVMe drive (`nvme scan`/`fatload nvme` fail). Instead the RPi firmware loads the
+> kernel directly and A/B slot selection is done with the firmware's `tryboot` feature.
+> See [SETUP.md §11](SETUP.md) for the full rationale.
 
 ---
 
@@ -11,35 +18,60 @@ Headless, SSH-only, booting from NVMe via Argon ONE V3 PCIe enclosure.
 |---|---|
 | SBC | Raspberry Pi 5, 8 GB RAM |
 | Enclosure | Argon ONE V3 PCIe |
-| Storage | NVMe via PCIe FFC connector (primary) + microSD (silent fallback) |
+| Storage | NVMe (~128 GB) via PCIe FFC connector + microSD (flash/recovery tool) |
 | Network | Direct Ethernet to host laptop — no router, no switch |
 
 ---
 
 ## What This Builds
 
-| Image | Target | SSH server | Purpose |
-|---|---|---|---|
-| `core-image-minimal` | microSD | Dropbear | Recovery fallback, NVMe flash tool |
-| `rpi5-base-image` | NVMe | OpenSSH | Primary running system |
+| Image | Target | Purpose |
+|---|---|---|
+| `core-image-minimal` | microSD | Recovery / NVMe flashing tool (Dropbear SSH) |
+| `rpi5-base-image` | NVMe | Primary RAUC A/B system (OpenSSH) |
+| `rpi5-rauc-bundle` | — | Signed `.raucb` OTA update bundle |
 
-Both images come up at `169.254.100.1/16` on `eth0` — static IP, no DHCP required.
+Both bootable images come up at `169.254.100.1/16` on `eth0` — static IP, no DHCP.
 
 ---
 
-## Boot Architecture
+## Boot Architecture (firmware tryboot A/B)
 
 ```
 Power on
-  └── EEPROM (BOOT_ORDER=0xf16 — NVMe first, SD fallback)
-        ├── nvme0n1p1 (FAT32) ← normal path
-        │     ├── Linux 6.6.63 + bcm2712-rpi-5-b.dtb
-        │     └── root=/dev/nvme0n1p2 (116 GB, auto-resized on first boot)
-        └── mmcblk0p1 (FAT32) ← fallback if NVMe fails
-              └── root=/dev/mmcblk0p2 (core-image-minimal)
+  └── EEPROM (BOOT_ORDER=0xf61 — SD first, NVMe fallback)
+        ├── microSD present  → boots core-image-minimal (flash/recovery)
+        └── microSD absent    → boots NVMe:
+              └── p1 bootsel (FAT) → autoboot.txt
+                    ├── [all]     boot_partition=2  (committed slot)
+                    └── [tryboot] boot_partition=3  (one-shot try target)
+                          │
+                          ▼ firmware loads config.txt from the chosen boot partition
+                    p2 boot-A / p3 boot-B (FAT)  → kernel_2712.img + dtb + config.txt
+                          config.txt: [boot_partition=2] cmdline=cmdline-rootfs-A.txt
+                                      [boot_partition=3] cmdline=cmdline-rootfs-B.txt
+                          │
+                          ▼
+                    p4 rootfs-A (root=…p4) / p5 rootfs-B (root=…p5)
 ```
 
-SD card stays inserted permanently — it does not interfere with NVMe boot.
+The EEPROM is **SD-first**, so inserting the microSD always gives a recovery path
+and is how the NVMe gets (re)flashed. Remove the SD to boot the NVMe system.
+
+### NVMe partition layout (GPT, 6 partitions)
+
+| Part | Label | FS | Size | Purpose |
+|---|---|---|---|---|
+| p1 | `bootsel` | vfat | 64 MB | `autoboot.txt` selector — stable, never written by RAUC |
+| p2 | `boot-a` | vfat | 256 MB | Slot A boot files (kernel, dtb, config.txt, cmdline-*) |
+| p3 | `boot-b` | vfat | 256 MB | Slot B boot files |
+| p4 | `rootfs-a` | ext4 | 4 GB | RAUC rootfs slot A |
+| p5 | `rootfs-b` | ext4 | 4 GB | RAUC rootfs slot B |
+| p6 | `data` | ext4 | rest | Persistent `/data` (auto-expanded on first boot) |
+
+`config.txt` is identical in both boot partitions; the firmware's `[boot_partition=N]`
+conditional selects the matching `cmdline-rootfs-{A,B}.txt`, so the same boot image
+works in either slot.
 
 ---
 
@@ -47,98 +79,82 @@ SD card stays inserted permanently — it does not interfere with NVMe boot.
 
 ```
 yocto-rpi5/
-├── build-rpi5/conf/        — local.conf, bblayers.conf
+├── build-rpi5/conf/        — local.conf (RPI_USE_U_BOOT="0"), bblayers.conf
 ├── meta-john/              — custom layer (git submodule)
-│   ├── wic/nvme-raspberrypi.wks                   — wic layout targeting nvme0n1
-│   ├── recipes-core/images/rpi5-base-image.bb
-│   ├── recipes-connectivity/eth0-networkd-config/ — static IP via systemd-networkd
-│   ├── recipes-connectivity/pi-ble-status/        — BLE GATT server: diagnostics + WiFi provisioning
-│   ├── recipes-connectivity/wlan0-config/         — DHCP for wlan0 via systemd-networkd + wpa-supplicant
-│   ├── recipes-core/ssh-keys/                     — bakes authorized SSH key into image
-│   ├── recipes-core/init-ifupdown/                — static IP for minimal image
-│   ├── recipes-core/packagegroups/                — removes ofono, neard
-│   └── recipes-core/resize-rootfs/                — auto-expands root on first boot
-├── SETUP.md                — full build and reflash procedure
-└── boot.log                — dmesg from first clean NVMe boot
+│   ├── wic/rauc-raspberrypi-tryboot.wks              — GPT A/B layout (nvme0n1)
+│   ├── recipes-core/images/rpi5-base-image.bb        — image + tryboot image setup
+│   ├── recipes-core/rauc/files/system.conf           — RAUC bootloader=custom + slots
+│   ├── recipes-core/rauc-tryboot-backend/            — custom backend (autoboot.txt)
+│   ├── recipes-core/rauc-bundle/                     — signed .raucb bundle recipe
+│   ├── recipes-core/resize-data/                     — first-boot /data expand (GPT-aware)
+│   ├── recipes-core/data-mount/                      — /data mount unit (nvme0n1p6)
+│   ├── recipes-connectivity/eth0-networkd-config/    — static IP via systemd-networkd
+│   ├── recipes-connectivity/pi-ble-status/           — BLE GATT: diagnostics + WiFi provisioning
+│   ├── recipes-connectivity/wlan0-config/            — wlan0 DHCP (RequiredForOnline=no)
+│   └── recipes-core/ssh-keys/                        — bakes authorized SSH key into image
+├── SETUP.md                — full build, flash, and RAUC OTA procedure
+└── boot.log                — annotated dmesg from a clean boot
 ```
 
-Upstream layers (not included — clone separately):
+Upstream / external layers (cloned separately — see SETUP.md):
+`poky`, `meta-openembedded`, `meta-raspberrypi`, `meta-rauc`, `meta-rauc-community`.
+
+---
+
+## Build (Docker — Ubuntu 22.04)
+
+Scarthgap does not officially support Fedora 44 as a build host, so builds run in a
+Docker container. See [SETUP.md §11](SETUP.md) for full layer setup and signing keys.
 
 ```bash
-git clone --branch scarthgap https://git.yoctoproject.org/poky
-git clone --branch scarthgap https://github.com/openembedded/meta-openembedded
-git clone --branch scarthgap https://git.yoctoproject.org/meta-raspberrypi
+# inside the build container, from the build dir:
+umask 022
+bitbake rpi5-base-image     # rootfs + GPT wic.bz2 (+ ext4 for the bundle)
+bitbake rpi5-rauc-bundle    # signed .raucb OTA bundle
 ```
 
 ---
 
-## Quick Start
+## Initial NVMe flash
 
-### 1. Clone
-
-```bash
-git clone --recurse-submodules https://github.com/John-H-Aal/yocto-rpi5
-cd yocto-rpi5
-```
-
-### 2. Clone upstream layers
+The EEPROM is SD-first, so flashing is done from the SD recovery image.
 
 ```bash
-git clone --branch scarthgap https://git.yoctoproject.org/poky
-git clone --branch scarthgap https://github.com/openembedded/meta-openembedded
-git clone --branch scarthgap https://git.yoctoproject.org/meta-raspberrypi
-```
+# 1. Insert microSD (boots core-image-minimal), SSH in
+ssh -o StrictHostKeyChecking=no root@169.254.100.1 'cat /sys/block/nvme0n1/size'
 
-### 3. Install host dependencies (Fedora)
-
-```bash
-sudo dnf install -y diffstat chrpath lz4 rpcgen SDL2-devel bmap-tools
-```
-
-### 4. Build
-
-```bash
-umask 022
-source poky/oe-init-build-env build-rpi5
-bitbake core-image-minimal     # SD recovery image
-bitbake rpi5-base-image        # NVMe target image
-```
-
-### 5. Flash SD card
-
-```bash
-sudo umount -l /dev/sdX1 /dev/sdX2 2>/dev/null
-bzcat build-rpi5/tmp/deploy/images/raspberrypi5/core-image-minimal-raspberrypi5.rootfs.wic.bz2 \
-    | sudo dd of=/dev/sdX bs=4M
-sudo eject /dev/sdX
-```
-
-### 6. Flash NVMe (from SD, via SSH)
-
-```bash
-# BOOT_ORDER=0xf16 boots NVMe first — zero the boot sector to force SD fallback
-ssh root@169.254.100.1 'dd if=/dev/zero of=/dev/nvme0n1p1 bs=512 count=1 && reboot'
-
-# Wait for SD to boot (uses Dropbear — StrictHostKeyChecking=no required)
-ssh-keygen -R 169.254.100.1
-until ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no root@169.254.100.1 'echo up'; do sleep 5; done
-
-# Confirm SD boot
-ssh -o StrictHostKeyChecking=no root@169.254.100.1 'cat /proc/cmdline | grep -o "root=[^ ]*"'
-# expect: root=/dev/mmcblk0p2
-
-# Pipe NVMe image directly from laptop
+# 2. Stream the GPT image straight onto the NVMe (BusyBox dd — no status=progress)
 bzcat build-rpi5/tmp/deploy/images/raspberrypi5/rpi5-base-image-raspberrypi5.rootfs.wic.bz2 \
     | ssh -o StrictHostKeyChecking=no root@169.254.100.1 'dd of=/dev/nvme0n1 bs=4M && sync'
 
-# Reboot as a separate command ('reboot' inside the pipe returns Access denied on SD image)
-ssh -o StrictHostKeyChecking=no root@169.254.100.1 reboot
-
-# Pi reboots from NVMe automatically (SD stays in as silent fallback)
-ssh-keygen -R 169.254.100.1 && ssh root@169.254.100.1
+# 3. Power off, REMOVE the SD card, power on → firmware boots the NVMe (slot A)
 ```
 
-Root partition auto-expands to fill the NVMe on first boot.
+On first boot `resize-data` relocates the GPT backup header and expands `/data` (p6)
+to fill the drive.
+
+---
+
+## RAUC A/B OTA update
+
+```bash
+# On the laptop: copy the bundle to the Pi (use /data — large, persistent)
+scp rpi5-rauc-bundle-raspberrypi5.raucb root@169.254.100.1:/data/update.raucb
+
+# On the Pi: install to the INACTIVE slot, activate it, reboot
+rauc install /data/update.raucb        # writes the new rootfs to the other slot
+rauc status mark-active other          # flips autoboot.txt [all] to that slot
+reboot                                 # boots the updated slot
+```
+
+After reboot, `rauc status` shows `Booted from`/`Activated` on the new slot, and
+`cat /etc/build-version` shows the new build. **Rollback** is `rauc status
+mark-active other` + `reboot` back to the previous slot.
+
+> **Note:** `rauc install` does not auto-activate in this setup — the explicit
+> `rauc status mark-active other` step calls the custom backend that rewrites
+> `autoboot.txt`. Automatic rollback-on-failure (firmware one-shot `tryboot`) needs
+> `raspberrypi-utils`/`vcmailbox` and is not yet wired in (see SETUP.md §11).
 
 ---
 
@@ -148,32 +164,40 @@ Root partition auto-expands to fill the NVMe on first boot.
 ssh root@169.254.100.1   # ED25519 key, no password
 ```
 
-Connect your laptop's Ethernet port directly to the Pi. No router needed — both sides use `169.254.0.0/16` link-local addressing.
+Connect the laptop's Ethernet port directly to the Pi — both sides use
+`169.254.0.0/16` link-local addressing, no router required.
 
 ---
 
 ## Key Design Decisions
 
-**Static IP over DHCP** — link-local static IP (`169.254.100.1/16`) needs no infrastructure and is consistent across reboots.
+**No U-Boot — firmware tryboot** — U-Boot lacks a Pi 5 (BCM2712) PCIe driver, so it
+cannot boot NVMe. The RPi firmware loads the kernel directly; A/B is done via
+`autoboot.txt` (`[all]`/`[tryboot]` → `boot_partition`).
 
-**systemd-networkd over NetworkManager** — NM built from sstate cache (before `DISTRO_FEATURES` included `systemd`) silently fails to configure interfaces. systemd-networkd with a `.network` file is simpler and reliable.
+**RAUC `bootloader=custom`** — a small backend (`tryboot-backend.sh`) implements
+`get/set-primary` and `get/set-state` by editing `autoboot.txt` on the selector
+partition (p1).
 
-**SSH key baked into image** — `debug-tweaks` + OpenSSH `PermitEmptyPasswords` is unreliable. The `ssh-keys` recipe installs `authorized_keys` at build time.
+**Per-slot boot + rootfs, shared `config.txt`** — `[boot_partition=N]` selects the
+matching `cmdline-rootfs-{A,B}.txt`, so one boot image works in either slot.
 
-**NVMe-first EEPROM** — boot order `0xf16` (NVMe → SD → restart). SD card stays inserted as silent recovery fallback — no need to remove it between normal reboots.
+**SD-first EEPROM (`0xf61`)** — inserting the microSD always wins, giving a reliable
+flash/recovery path; the NVMe boots only when the SD is absent.
 
-**Always flash from SD** — never write to NVMe while it is the running root. Insert SD (boots automatically as SD-first fallback) then pipe the image from the laptop.
+**systemd-networkd over NetworkManager** — NM built from sstate before `systemd` was a
+`DISTRO_FEATURE` silently fails; networkd with a `.network` file is reliable.
 
-**First-boot resize** — Yocto wic images create a fixed-size root partition. `resize-rootfs` expands it to fill the disk on first boot, runs once, then never again.
+**First-boot `/data` resize** — wic images are fixed size; `resize-data` relocates the
+GPT backup header (needed after `dd` onto a larger disk) then grows `/data` to fill.
 
-**BLE diagnostic + WiFi provisioning** — `pi-ble-status` advertises IP, temperature, uptime, and hostname over BLE (chars `1001`–`1005`). Char `1006` is writable: send `SSID/password` to provision wlan0 at runtime without reflashing. Useful when SSH is unreachable or WiFi credentials need updating.
-
-**wlan0 not required for boot** — `20-wlan0.network` sets `RequiredForOnline=no` so `network-online.target` does not wait for wlan0. Without it, SSH takes ~40 seconds while brcmfmac initializes the WiFi chip. eth0 is static and ready in ~5 seconds; wlan0 is optional and provisioned later via BLE.
+**BLE diagnostics + WiFi provisioning** — `pi-ble-status` exposes IP/temp/uptime/host
+over BLE and accepts WiFi credentials at runtime (no reflash).
 
 ---
 
 ## See Also
 
+- [SETUP.md](SETUP.md) — full build, flash, RAUC OTA, and gotchas
 - [meta-john](https://github.com/John-H-Aal/meta-john) — custom Yocto layer
-- [SETUP.md](SETUP.md) — full build log, gotchas, and reflash procedure
-- [boot.log](boot.log) — annotated dmesg from first clean NVMe boot
+- [boot.log](boot.log) — annotated dmesg from a clean boot
